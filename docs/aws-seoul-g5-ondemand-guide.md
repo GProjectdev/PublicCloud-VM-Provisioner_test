@@ -19,8 +19,8 @@ CRD와 컨트롤러 배포는 Spot 방식과 동일하다.
 ```bash
 make manifests
 make install
-make docker-build IMG=<registry>/remote-cluster-provisioner:aws-g5
-docker push <registry>/remote-cluster-provisioner:aws-g5
+make docker-build CONTAINER_TOOL=buildah IMG=<registry>/remote-cluster-provisioner:aws-g5
+make docker-push CONTAINER_TOOL=buildah IMG=<registry>/remote-cluster-provisioner:aws-g5
 make deploy IMG=<registry>/remote-cluster-provisioner:aws-g5
 ```
 

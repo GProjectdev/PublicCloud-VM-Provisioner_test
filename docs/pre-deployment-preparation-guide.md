@@ -7,7 +7,7 @@
 다음 조건을 모두 만족하면 Controller 배포를 시작할 수 있다.
 
 - On-Premise Kubernetes control plane이 `Ready`이다.
-- 배포 서버에서 `kubectl`, `make`, Go, Docker, Helm을 실행할 수 있다.
+- 배포 서버에서 `kubectl`, `make`, Go, Buildah, Skopeo, Helm을 실행할 수 있다.
 - Controller 이미지를 저장할 Registry가 있고 Kubernetes Node에서 pull할 수 있다.
 - WireGuard VPN Server에 SSH로 접속할 수 있고 UDP 51820이 열려 있다.
 - AWS Worker가 VPN을 통해 Kubernetes API Server의 TCP 6443에 접근할 수 있다.
@@ -25,10 +25,21 @@
 git --version
 go version
 make --version
-docker version
+buildah version
+buildah info
+skopeo --version
 kubectl version --client
 helm version
 ```
+
+Ubuntu 계열 배포 서버에서는 다음과 같이 설치할 수 있다. 다른 Linux 배포판에서는 해당 배포판의 패키지 관리자를 사용한다.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y buildah skopeo
+```
+
+`buildah info`가 실패하면 rootless user namespace 설정과 `/etc/subuid`, `/etc/subgid` 등록 상태를 먼저 확인한다. 이후 명령은 모두 일반 사용자로 실행하거나 모두 `sudo`로 실행해야 한다. 두 방식을 섞으면 이미지 저장소와 Registry 인증 정보가 서로 달라진다.
 
 Kubernetes 연결을 확인한다.
 
@@ -318,9 +329,17 @@ kubectl get node <GPU_NODE_NAME> \
 Controller 이미지를 저장할 Registry를 준비한다.
 
 ```bash
-docker login <REGISTRY>
-docker build -t <REGISTRY>/remote-cluster-provisioner:aws-g5 .
-docker push <REGISTRY>/remote-cluster-provisioner:aws-g5
+export IMG=<REGISTRY>/remote-cluster-provisioner:aws-g5
+buildah login <REGISTRY>
+buildah bud --format docker --arch amd64 -t ${IMG} .
+buildah push ${IMG} docker://${IMG}
+skopeo inspect docker://${IMG}
+```
+
+GitHub Container Registry를 사용한다면 `<REGISTRY>`는 `ghcr.io`이며, 비밀번호 대신 package write 권한이 있는 Personal Access Token을 사용한다.
+
+```bash
+echo "${GHCR_TOKEN}" | buildah login ghcr.io -u <GITHUB_USER> --password-stdin
 ```
 
 On-Premise Node에서 pull 가능한지 확인한다.
@@ -386,7 +405,7 @@ aws ec2 describe-subnets \
   --query 'Subnets[0].AvailabilityZone'
 
 # Controller 이미지
-docker manifest inspect <REGISTRY>/remote-cluster-provisioner:aws-g5
+skopeo inspect docker://<REGISTRY>/remote-cluster-provisioner:aws-g5
 ```
 
 ## 16. Kubernetes에 Remote Cluster Provisioner 설치
@@ -440,20 +459,32 @@ export IMG=<REGISTRY>/remote-cluster-provisioner:aws-g5
 export IMG=ghcr.io/gprojectdev/publiccloud-vm-provisioner:aws-g5
 ```
 
-로그인한 뒤 이미지를 빌드하고 push한다.
+로그인한 뒤 이미지를 빌드하고 push한다. Makefile의 타깃 이름은 `docker-build`, `docker-push`이지만 `CONTAINER_TOOL=buildah`를 지정하면 실제 실행 도구는 Buildah가 된다.
 
 ```bash
-docker login <REGISTRY>
-make docker-build IMG=${IMG}
-make docker-push IMG=${IMG}
-docker manifest inspect ${IMG}
+buildah login <REGISTRY>
+make docker-build CONTAINER_TOOL=buildah IMG=${IMG}
+make docker-push CONTAINER_TOOL=buildah IMG=${IMG}
+skopeo inspect docker://${IMG}
 ```
 
-On-Premise Kubernetes Node의 CPU 아키텍처가 빌드 서버와 다르면 `docker-buildx`를 사용한다.
+빌드 서버와 On-Premise Kubernetes Node가 모두 `amd64`라면 위 단일 아키텍처 방식이 가장 단순하다. 아키텍처를 명시해서 직접 빌드하려면 다음 명령을 사용할 수 있다.
 
 ```bash
-make docker-buildx IMG=${IMG}
+buildah bud --format docker --arch amd64 -t ${IMG} .
+buildah push ${IMG} docker://${IMG}
 ```
+
+여러 CPU 아키텍처를 동시에 지원해야 하면 `make docker-buildx`를 사용하지 않는다. Buildah에는 `buildx` 하위 명령이 없으므로 Buildah manifest 기능을 사용한다.
+
+```bash
+buildah build \
+  --platform linux/amd64,linux/arm64 \
+  --manifest ${IMG}-manifest .
+buildah manifest push --all ${IMG}-manifest docker://${IMG}
+```
+
+다른 아키텍처의 `RUN` 명령을 현재 호스트에서 실행하려면 QEMU/binfmt 설정이 별도로 필요하다. 이 프로젝트의 첫 배포에서는 Kubernetes Node 아키텍처에 맞춘 단일 아키텍처 이미지를 권장한다.
 
 Private Registry를 사용하면 Controller Deployment에 `imagePullSecrets`가 필요하다. 현재 기본 `config/default`에는 `imagePullSecrets`가 없으므로, 처음 검증할 때는 클러스터에서 pull 가능한 Registry 또는 공개 이미지를 사용하는 것이 단순하다.
 
