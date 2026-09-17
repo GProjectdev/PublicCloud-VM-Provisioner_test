@@ -2,6 +2,8 @@
 
 이 문서는 On-Premise Kubernetes의 `remote-cluster-provisioner`를 이용해 AWS `ap-northeast-2c`에 NVIDIA A10G GPU 1개를 제공하는 `g5.xlarge` On-Demand 인스턴스를 생성하고 Worker Node로 등록하는 절차를 설명한다.
 
+먼저 [`pre-deployment-preparation-guide.md`](pre-deployment-preparation-guide.md)의 준비 및 Preflight를 완료한다.
+
 ## 1. 사전 조건
 
 - On-Premise Kubernetes control plane과 동작 중인 `NodeProvisionNetConfig`
@@ -108,4 +110,3 @@ On-Demand 인스턴스는 사용 시간만큼 정상 요금이 계속 발생하�
 - `no subnet found`: `ap-northeast-2c` subnet 부재
 - `InsufficientInstanceCapacity`: 해당 AZ의 일시적인 On-Demand 용량 부족
 - `VcpuLimitExceeded`: EC2 GPU 계열 서비스 할당량 부족
-

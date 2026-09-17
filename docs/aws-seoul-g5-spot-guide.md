@@ -2,6 +2,8 @@
 
 이 문서는 On-Premise Kubernetes의 `remote-cluster-provisioner`를 이용해 AWS `ap-northeast-2c`에 NVIDIA A10G GPU 1개를 제공하는 `g5.xlarge` Spot 인스턴스를 생성하고 Worker Node로 등록하는 절차를 설명한다.
 
+먼저 [`pre-deployment-preparation-guide.md`](pre-deployment-preparation-guide.md)의 준비 및 Preflight를 완료한다.
+
 ## 1. 사전 조건
 
 - On-Premise Kubernetes control plane과 동작 중인 `NodeProvisionNetConfig`
@@ -110,4 +112,3 @@ NodeProvision finalizer가 EC2 인스턴스와 VPN peer를 정리한다. 강제�
 - `no subnet found`: 기본 VPC에 `ap-northeast-2c` subnet이 없으므로 subnet을 생성하거나 `subnetId`를 명시해야 함
 - `InsufficientInstanceCapacity`: 현재 Spot 용량 부족
 - `VcpuLimitExceeded`: EC2 GPU 계열 서비스 할당량 부족
-
