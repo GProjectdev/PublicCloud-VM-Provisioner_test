@@ -410,8 +410,6 @@ skopeo inspect docker://<REGISTRY>/remote-cluster-provisioner:aws-g5
 
 ## 16. Kubernetes에 Remote Cluster Provisioner 설치
 
-Controller를 `workload-role=management` 라벨이 있는 On-Premise 관리 Node에 고정하려면 [`config/management-node`](../config/management-node/README.md) Kustomize overlay를 사용할 수 있다. Control Plane Node를 사용할 경우 overlay에 포함된 toleration이 `NoSchedule` taint를 허용한다.
-
 사전 준비가 끝났으면 다음 구성요소를 On-Premise Kubernetes에 설치해야 한다.
 
 ```text
