@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gcp-nodeprovision-credentials
+  namespace: default
+type: Opaque
+stringData:
+  # Paste a GCP service-account JSON key here. If omitted, the controller pod
+  # must have Application Default Credentials available.
+  serviceAccountJSON: |
+    {"type":"service_account","project_id":"YOUR_PROJECT_ID"}
+---
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvision
+metadata:
+  name: gcp-cpu-worker
+  namespace: default
+spec:
+  provider: GCP
+  nodeLabel: cpu
+  hardwareType: cpu
+  role: worker
+  instanceType: e2-standard-4
+  credentialsRef:
+    name: gcp-nodeprovision-credentials
+    namespace: default
+  gcpConfig:
+    projectId: YOUR_PROJECT_ID
+    zone: us-central1-a
+    network: global/networks/default
+    imageProject: ubuntu-os-cloud
+    imageFamily: ubuntu-2204-lts
+    rootDiskSizeGB: 50
+    tags:
+      - k8s-worker
+---
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvision
+metadata:
+  name: gcp-spot-cpu-worker
+  namespace: default
+spec:
+  provider: GCP
+  marketType: Spot
+  # GCP Spot VMs support STOP or DELETE when preempted.
+  spotTerminationAction: STOP
+  nodeLabel: cpu
+  hardwareType: cpu
+  role: worker
+  instanceType: e2-standard-4
+  credentialsRef:
+    name: gcp-nodeprovision-credentials
+    namespace: default
+  gcpConfig:
+    projectId: YOUR_PROJECT_ID
+    zone: us-central1-a
+    network: global/networks/default
+    imageProject: ubuntu-os-cloud
+    imageFamily: ubuntu-2204-lts
+    rootDiskSizeGB: 50
+    tags:
+      - k8s-worker
+      - spot-worker

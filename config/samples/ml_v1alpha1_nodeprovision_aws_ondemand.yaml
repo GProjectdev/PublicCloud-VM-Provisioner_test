@@ -1,0 +1,25 @@
+# AWS Seoul On-Demand GPU worker. g5.xlarge provides one NVIDIA A10G GPU.
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvision
+metadata:
+  name: aws-g5-ondemand-worker-001
+  namespace: default
+spec:
+  provider: AWS
+  role: worker
+  nodeLabel: gpu
+  hardwareType: gpu
+  region: ap-northeast-2
+  instanceType: g5.xlarge
+  marketType: OnDemand
+  credentialsRef:
+    name: aws-node-credentials
+    namespace: default
+  awsConfig:
+    availabilityZone: ap-northeast-2c
+    rootVolumeSizeGB: 100
+    tags:
+      workload: gpu-training
+      capacity: on-demand
+  # The controller resolves the latest Ubuntu 22.04 AMI, a subnet in
+  # ap-northeast-2c, the default security group, and an EC2 key pair.

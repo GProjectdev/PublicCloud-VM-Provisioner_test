@@ -1,0 +1,67 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: remote-cluster-provisioner-manager
+  labels:
+    app.kubernetes.io/name: remote-cluster-provisioner
+rules:
+  # Core: nodes (read, patch, delete for join/drain lifecycle)
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch, patch, update, delete]
+
+  # Core: secrets (kubeconfig, cloud credentials, WireGuard keys)
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create, update, patch]
+
+  # Batch: jobs — NodeProvision controller creates/deletes image pre-pull Jobs
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+
+  # Custom: RemoteCluster (infra.dcn.ssu.ac.kr/v1)
+  - apiGroups: [infra.dcn.ssu.ac.kr]
+    resources: [remoteclusters]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [infra.dcn.ssu.ac.kr]
+    resources: [remoteclusters/status]
+    verbs: [get, update, patch]
+  - apiGroups: [infra.dcn.ssu.ac.kr]
+    resources: [remoteclusters/finalizers]
+    verbs: [update]
+
+  # Custom: NodeProvision + NodeProvisionNetConfig (ml.dcn.ssu.ac.kr/v1alpha1)
+  - apiGroups: [ml.dcn.ssu.ac.kr]
+    resources: [nodeprovisions, nodeprovisionnetconfigs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [ml.dcn.ssu.ac.kr]
+    resources: [nodeprovisions/status, nodeprovisionnetconfigs/status]
+    verbs: [get, update, patch]
+  - apiGroups: [ml.dcn.ssu.ac.kr]
+    resources: [nodeprovisions/finalizers, nodeprovisionnetconfigs/finalizers]
+    verbs: [update]
+
+  # Core: configmaps — read cluster-info from kube-public to build kubeadm join
+  # commands (CA cert hash + API server URL).
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get]
+
+  # Core: events — CRs may live in any namespace; controller-runtime records events
+  # in the object's namespace, so this must be cluster-scoped.
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+
+  # Porch / Nephio — only needed when RemoteCluster GitConfig is enabled.
+  # Remove these rules if you are not running Porch/Nephio on this cluster.
+  - apiGroups: [config.porch.kpt.dev]
+    resources: [repositories]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [porch.kpt.dev]
+    resources: [packagevariants]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [token.nephio.org]
+    resources: [tokens]
+    verbs: [get, list, watch, create, update, patch, delete]
