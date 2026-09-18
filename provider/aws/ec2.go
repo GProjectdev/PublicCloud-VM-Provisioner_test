@@ -629,8 +629,12 @@ func importKeyPair(ctx context.Context, client *ec2.Client, keyPairName string, 
 		return fmt.Errorf("describing key pair %q: %w", keyPairName, err)
 	}
 	if existing != nil && len(existing.KeyPairs) > 0 {
-		// Key pair exists — nothing to do; the public material is already there.
-		return nil
+		// Replace the existing key so EC2 always matches the private key in Secret.
+		if _, err := client.DeleteKeyPair(ctx, &ec2.DeleteKeyPairInput{
+			KeyName: awssdk.String(keyPairName),
+		}); err != nil {
+			return fmt.Errorf("deleting stale key pair %q: %w", keyPairName, err)
+		}
 	}
 
 	_, err = client.ImportKeyPair(ctx, &ec2.ImportKeyPairInput{

@@ -224,6 +224,7 @@ ec2:DescribeSecurityGroups
 ec2:CreateTags
 ec2:DescribeKeyPairs
 ec2:ImportKeyPair
+ec2:DeleteKeyPair
 ```
 
 `RunInstances`는 AMI뿐 아니라 Volume, Network Interface, Subnet, Security Group 및 Key Pair 리소스 사용 권한도 필요하다. 참고: [AWS EC2 IAM policy examples](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policies-ec2-console.html)
