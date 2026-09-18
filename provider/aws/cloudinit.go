@@ -142,6 +142,7 @@ type templateData struct {
 	CRIOSocket           string
 	RuntimeCredentials   string // bash export block; Token value must never be logged
 	RuntimeInstallScript string // rendered by pkgruntime.InstallScript
+	RuntimeEnabled       bool
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
@@ -192,6 +193,7 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 		CRIOSocket:           crioSocket,
 		RuntimeCredentials:   runtimeCreds,
 		RuntimeInstallScript: pkgruntime.InstallScript(runtimeCfg),
+		RuntimeEnabled:       runtimeCfg.Enabled,
 	}
 
 	var out bytes.Buffer
@@ -413,12 +415,25 @@ report "WireGuard is ready on ${NODE_IP}"
 # Credentials are set here and consumed by the install script below.
 # Token is embedded in user-data which is only accessible from the instance
 # itself via IMDSv2. It is NOT logged by this script.
+{{if .RuntimeEnabled}}
 {{.RuntimeCredentials}}
 
 {{.RuntimeInstallScript}}
 
 # Unset credentials immediately after the install script runs.
 unset CNLAB_REGISTRY_USER CNLAB_REGISTRY_TOKEN
+{{else}}
+report "Installing standard CRI-O ${K8S_MINOR}"
+mkdir -p /etc/apt/keyrings
+rm -f /etc/apt/keyrings/cri-o-apt-keyring.gpg
+curl -fsSL "https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v${K8S_MINOR}/deb/Release.key" \
+  | gpg --batch --yes --dearmor -o /etc/apt/keyrings/cri-o-apt-keyring.gpg
+printf '%s\n' \
+  "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v${K8S_MINOR}/deb/ /" \
+  > /etc/apt/sources.list.d/cri-o.list
+apt_update
+apt_install cri-o criu
+{{end}}
 
 # -----------------------------------------------------------------------------
 # CRI-O configuration drop-ins
