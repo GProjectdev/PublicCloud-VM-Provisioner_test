@@ -88,8 +88,7 @@ type SoftwareConfig struct {
 	// +optional
 	ImagePullSecretRef *SecretKeyReference `json:"imagePullSecretRef,omitempty"`
 
-	// CnlabRuntime configures the prebuilt cnlab-runtime OCI artifact installation.
-	// All fields are optional; defaults apply when omitted.
+	// Deprecated: NodeProvision workers ignore this field and install standard CRI-O.
 	// +optional
 	CnlabRuntime *CnlabRuntimeConfig `json:"cnlabRuntime,omitempty"`
 }

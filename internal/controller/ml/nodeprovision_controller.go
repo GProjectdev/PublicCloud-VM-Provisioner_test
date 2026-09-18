@@ -466,10 +466,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving AWS credentials: %v", err))
 	}
 
-	runtimeCfg, err := r.resolveCnlabRuntimeConfig(ctx, netConfig.Spec.SoftwareConfig, netConfig.Namespace)
-	if err != nil {
-		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving cnlab-runtime config: %v", err))
-	}
+	runtimeCfg := pkgruntime.Config{}
 
 	result, err := awsprovision.ProvisionEC2Node(ctx, np, creds, vpnServerClient, netConfig, runtimeCfg)
 	// Always persist VPN allocation immediately — even on EC2 failure — so that
@@ -582,10 +579,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	}
 	log.Info("Creating GCP instance")
 
-	runtimeCfg, err := r.resolveCnlabRuntimeConfig(ctx, netConfig.Spec.SoftwareConfig, netConfig.Namespace)
-	if err != nil {
-		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving cnlab-runtime config: %v", err))
-	}
+	runtimeCfg := pkgruntime.Config{}
 
 	result, err := gcpprovision.ProvisionGCPNode(ctx, np, gcpprovision.ResolveGCPCredentials(secret), vpnServerClient, netConfig, runtimeCfg)
 	if result != nil && result.VpnIP != "" {
@@ -967,14 +961,7 @@ func (r *NodeProvisionReconciler) reconcileOnPremProvisioning(
 		}
 	}
 
-	// Resolve runtime config before the goroutine so credentials are fetched
-	// within the reconcile context (which has a proper timeout and client).
-	runtimeCfg, err := r.resolveCnlabRuntimeConfig(ctx, netConfig.Spec.SoftwareConfig, netConfig.Namespace)
-	if err != nil {
-		sshClient.Conn.Close()       //nolint:errcheck
-		vpnServerClient.Conn.Close() //nolint:errcheck
-		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving cnlab-runtime config: %v", err))
-	}
+	runtimeCfg := pkgruntime.Config{}
 
 	// Snapshot values needed by the goroutine before returning.
 	npCopy := np.DeepCopy()
@@ -2349,44 +2336,6 @@ func ensureFinalizer(np *mlv1alpha1.NodeProvision, finalizer string) bool {
 		return true
 	}
 	return false
-}
-
-// resolveCnlabRuntimeConfig builds a pkgruntime.Config from the SoftwareConfig.
-// If CnlabRuntime.CredentialsRef is set, it reads the referenced Secret's
-// "username" and "token" keys. The token is kept in memory only and never logged.
-func (r *NodeProvisionReconciler) resolveCnlabRuntimeConfig(
-	ctx context.Context,
-	softwareCfg mlv1alpha1.SoftwareConfig,
-	namespace string,
-) (pkgruntime.Config, error) {
-	cfg := pkgruntime.Config{}
-	if softwareCfg.CnlabRuntime != nil {
-		cfg.Enabled = true
-		cr := softwareCfg.CnlabRuntime
-		cfg.Registry = cr.Registry
-		cfg.Repository = cr.Repository
-		cfg.Version = cr.Version
-		cfg.OrasVersion = cr.OrasVersion
-
-		ref := cr.CredentialsRef
-		if ref.Name != "" {
-			ns := ref.NameSpace
-			if ns == "" {
-				ns = namespace
-			}
-			var secret corev1.Secret
-			if err := r.Get(ctx, types.NamespacedName{
-				Name:      ref.Name,
-				Namespace: ns,
-			}, &secret); err != nil {
-				return pkgruntime.Config{}, fmt.Errorf("reading cnlab-runtime credentials secret %s/%s: %w", ns, ref.Name, err)
-			}
-			cfg.Username = string(secret.Data["username"])
-			cfg.Token = string(secret.Data["token"]) // never log
-		}
-	}
-	cfg.ApplyDefaults()
-	return cfg, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

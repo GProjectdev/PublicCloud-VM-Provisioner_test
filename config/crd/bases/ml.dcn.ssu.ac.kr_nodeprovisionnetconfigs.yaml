@@ -45,9 +45,8 @@ spec:
               softwareConfig:
                 properties:
                   cnlabRuntime:
-                    description: |-
-                      CnlabRuntime configures the prebuilt cnlab-runtime OCI artifact installation.
-                      All fields are optional; defaults apply when omitted.
+                    description: Deprecated. NodeProvision workers ignore this field
+                      and install standard CRI-O.
                     properties:
                       credentialsRef:
                         description: |-
