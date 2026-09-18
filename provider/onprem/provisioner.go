@@ -16,12 +16,13 @@ limitations under the License.
 */
 
 import (
-	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -592,33 +593,23 @@ func verifyVPNConnectivity(vpnServerClient *sshhelper.Client, vpnNodeIP string) 
 func GenerateWireGuardKeyPair() (string, string, error) { return generateWireGuardKeyPair() }
 
 func generateWireGuardKeyPair() (string, string, error) {
-
-	privateCmd := exec.Command("wg", "genkey")
-
-	var privateOut bytes.Buffer
-	privateCmd.Stdout = &privateOut
-
-	if err := privateCmd.Run(); err != nil {
-		return "", "", fmt.Errorf("failed generating private key: %w", err)
+	privateBytes := make([]byte, 32)
+	if _, err := rand.Read(privateBytes); err != nil {
+		return "", "", fmt.Errorf("generating private key entropy: %w", err)
 	}
 
-	privateKey := strings.TrimSpace(privateOut.String())
+	// WireGuard private keys are clamped X25519 scalars.
+	privateBytes[0] &= 248
+	privateBytes[31] &= 127
+	privateBytes[31] |= 64
 
-	publicCmd := exec.Command(
-		"bash",
-		"-c",
-		fmt.Sprintf("echo '%s' | wg pubkey", privateKey),
-	)
-
-	var publicOut bytes.Buffer
-	publicCmd.Stdout = &publicOut
-
-	if err := publicCmd.Run(); err != nil {
-		return "", "", fmt.Errorf("failed generating public key: %w", err)
+	private, err := ecdh.X25519().NewPrivateKey(privateBytes)
+	if err != nil {
+		return "", "", fmt.Errorf("constructing X25519 private key: %w", err)
 	}
 
-	publicKey := strings.TrimSpace(publicOut.String())
-
+	privateKey := base64.StdEncoding.EncodeToString(privateBytes)
+	publicKey := base64.StdEncoding.EncodeToString(private.PublicKey().Bytes())
 	return privateKey, publicKey, nil
 }
 

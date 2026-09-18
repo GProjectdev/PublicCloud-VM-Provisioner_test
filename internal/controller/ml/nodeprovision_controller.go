@@ -179,7 +179,10 @@ echo "node reset complete"
 // +kubebuilder:rbac:groups=ml.dcn.ssu.ac.kr,resources=nodeprovisionnetconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch;update;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get,namespace=kube-public
+// The controller-runtime cached client starts a cluster-scoped informer for
+// ConfigMaps, so list/watch are required even though reconciliation reads only
+// kube-public/cluster-info.
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 
 func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -1942,7 +1945,7 @@ func (r *NodeProvisionReconciler) requireNetConfig(ctx context.Context, _ *mlv1a
 // control-plane node.
 //
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch,namespace=kube-system
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get,namespace=kube-public
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 func (r *NodeProvisionReconciler) refreshLocalJoinToken(ctx context.Context, nc *mlv1alpha1.NodeProvisionNetConfig) error {
 	// ── 1. Generate token ID (6 chars) and secret (16 chars) ─────────────────
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
