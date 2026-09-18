@@ -92,6 +92,7 @@ func NewInClusterProvisioner(
 		netNodeConfig.Spec.VPNServerPublicConfig.PublicIP,
 		parsePort(netNodeConfig.Spec.VPNServerPublicConfig.VPNPort, 51820),
 		privateKey,
+		nil,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed building wireguard client config: %w", err)
@@ -491,6 +492,33 @@ func RegisterVPNPeer(vpnServerClient *sshhelper.Client, publicKey, vpnNodeIP str
 //     removed before the new block is appended.
 //   - The append is skipped if our public key is already present.
 func registerVPNPeer(vpnServerClient *sshhelper.Client, publicKey, vpnNodeIP string) error {
+	forwardCmd := `
+set -e
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-nodeprovision-wireguard.conf >/dev/null
+sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null
+sudo iptables -C FORWARD -i wg0 -o wg0 -j ACCEPT 2>/dev/null || \
+  sudo iptables -A FORWARD -i wg0 -o wg0 -j ACCEPT
+sudo tee /etc/systemd/system/nodeprovision-wireguard-forward.service >/dev/null <<'UNIT'
+[Unit]
+Description=Allow forwarding between WireGuard provisioning peers
+After=wg-quick@wg0.service
+Wants=wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/sbin/iptables -C FORWARD -i wg0 -o wg0 -j ACCEPT 2>/dev/null || /usr/sbin/iptables -A FORWARD -i wg0 -o wg0 -j ACCEPT'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable nodeprovision-wireguard-forward.service >/dev/null
+`
+	if output, err := sshhelper.Run(vpnServerClient, forwardCmd); err != nil {
+		return fmt.Errorf("enabling VPN peer forwarding: %w\nOutput:\n%s", err, output)
+	}
+
 	// ── 1. Read live server state ──────────────────────────────────────────
 	serverPeers, readErr := readVPNServerPeers(vpnServerClient)
 	if readErr != nil {
@@ -614,8 +642,31 @@ func generateWireGuardKeyPair() (string, string, error) {
 }
 
 // BuildClientWGConfig is the exported form used by cloud-provider provisioners.
-func BuildClientWGConfig(vpnServerClient *sshhelper.Client, vpnNodeIP, vpnRange, serverPublicIP string, vpnPort int, privateKey string) (string, error) {
-	return buildClientWGConfig(vpnServerClient, vpnNodeIP, vpnRange, serverPublicIP, vpnPort, privateKey)
+func BuildClientWGConfig(vpnServerClient *sshhelper.Client, vpnNodeIP, vpnRange, serverPublicIP string, vpnPort int, privateKey string, extraAllowedIPs []string) (string, error) {
+	return buildClientWGConfig(vpnServerClient, vpnNodeIP, vpnRange, serverPublicIP, vpnPort, privateKey, extraAllowedIPs)
+}
+
+// KubernetesAPIAllowedIP extracts an IP host route from a kubeadm join command.
+func KubernetesAPIAllowedIP(joinCommand string) (string, error) {
+	fields := strings.Fields(joinCommand)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] != "join" {
+			continue
+		}
+		host, _, err := net.SplitHostPort(fields[i+1])
+		if err != nil {
+			return "", fmt.Errorf("parsing kubeadm API endpoint %q: %w", fields[i+1], err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return "", fmt.Errorf("kubeadm API endpoint %q is not an IP address", host)
+		}
+		if ip.To4() != nil {
+			return ip.String() + "/32", nil
+		}
+		return ip.String() + "/128", nil
+	}
+	return "", fmt.Errorf("kubeadm join command has no API endpoint")
 }
 
 // buildClientWGConfig fetches the VPN server's WireGuard public key and actual
@@ -626,6 +677,7 @@ func buildClientWGConfig(
 	vpnNodeIP, vpnRange, serverPublicIP string,
 	vpnPort int,
 	privateKey string,
+	extraAllowedIPs []string,
 ) (string, error) {
 	pubKeyOut, err := sshhelper.Run(vpnServerClient, "sudo wg show wg0 public-key")
 	if err != nil {
@@ -649,7 +701,21 @@ func buildClientWGConfig(
 		vpnPort = 51820
 	}
 
-	log.Printf("Building WireGuard client config: server=%s port=%d", serverPublicIP, vpnPort)
+	allowedIPs := []string{vpnRange}
+	seen := map[string]bool{vpnRange: true}
+	for _, cidr := range extraAllowedIPs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || seen[cidr] {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return "", fmt.Errorf("invalid additional WireGuard AllowedIPs entry %q: %w", cidr, err)
+		}
+		allowedIPs = append(allowedIPs, cidr)
+		seen[cidr] = true
+	}
+
+	log.Printf("Building WireGuard client config: server=%s port=%d allowedIPs=%s", serverPublicIP, vpnPort, strings.Join(allowedIPs, ","))
 
 	cfg := fmt.Sprintf(`[Interface]
 PrivateKey = %s
@@ -660,7 +726,7 @@ PublicKey = %s
 Endpoint = %s:%d
 AllowedIPs = %s
 PersistentKeepalive = 25
-`, privateKey, vpnNodeIP, serverPublicKey, serverPublicIP, vpnPort, vpnRange)
+`, privateKey, vpnNodeIP, serverPublicKey, serverPublicIP, vpnPort, strings.Join(allowedIPs, ", "))
 
 	return cfg, nil
 }

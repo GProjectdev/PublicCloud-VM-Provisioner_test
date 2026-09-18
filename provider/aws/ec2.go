@@ -181,6 +181,10 @@ func ProvisionEC2Node(
 	if err != nil {
 		return nil, fmt.Errorf("generating WireGuard keypair: %w", err)
 	}
+	apiAllowedIP, err := onprem.KubernetesAPIAllowedIP(netNodeConfig.Status.ClusterJoinCommand)
+	if err != nil {
+		return nil, fmt.Errorf("resolving Kubernetes API route: %w", err)
+	}
 
 	// ── Build WireGuard client config ──────────────────────────────────────
 	wgConfig, err := onprem.BuildClientWGConfig(
@@ -190,6 +194,7 @@ func ProvisionEC2Node(
 		netNodeConfig.Spec.VPNServerPublicConfig.PublicIP,
 		parsePort(netNodeConfig.Spec.VPNServerPublicConfig.VPNPort, 51820),
 		privateKey,
+		[]string{apiAllowedIP},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("building WireGuard client config: %w", err)
