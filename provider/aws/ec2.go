@@ -29,7 +29,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	mlv1alpha1 "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
-	pkgruntime "dcn.ssu.ac.kr/infra/pkg/runtime"
 	sshhelper "dcn.ssu.ac.kr/infra/pkg/ssh"
 	onprem "dcn.ssu.ac.kr/infra/provider/onprem"
 	corev1 "k8s.io/api/core/v1"
@@ -158,7 +157,6 @@ func ProvisionEC2Node(
 	creds AWSCredentials,
 	vpnServerClient *sshhelper.Client,
 	netNodeConfig *mlv1alpha1.NodeProvisionNetConfig,
-	runtimeCfg pkgruntime.Config,
 ) (*ProvisionResult, error) {
 
 	name := nodeProvision.Name
@@ -229,13 +227,6 @@ func ProvisionEC2Node(
 		Labels:                 labels,
 		SSHUsername:            nodeProvision.Spec.SSHUsernameOverride,
 		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
-		RuntimeRegistryUser:    runtimeCfg.Username,
-		RuntimeRegistryToken:   runtimeCfg.Token,
-		RuntimeEnabled:         runtimeCfg.Enabled,
-		RuntimeRegistry:        runtimeCfg.Registry,
-		RuntimeRepository:      runtimeCfg.Repository,
-		RuntimeVersion:         runtimeCfg.Version,
-		RuntimeOrasVersion:     runtimeCfg.OrasVersion,
 	})
 
 	// ── Create EC2 instance ────────────────────────────────────────────────

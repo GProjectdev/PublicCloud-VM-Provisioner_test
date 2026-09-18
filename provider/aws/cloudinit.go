@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
-
-	pkgruntime "dcn.ssu.ac.kr/infra/pkg/runtime"
 )
 
 // CloudInitParams contains the values required to bootstrap an EC2 Kubernetes worker.
@@ -29,17 +27,6 @@ type CloudInitParams struct {
 	// IsGPUNode identifies this worker as a GPU node. It controls Kubernetes
 	// node labels only; GPU Operator owns all NVIDIA software/runtime setup.
 	IsGPUNode bool
-
-	// Runtime registry credentials for pulling the cnlab-runtime OCI artifact.
-	// These values come from a Kubernetes Secret resolved by the controller.
-	// Token must never be logged.
-	RuntimeRegistryUser  string
-	RuntimeRegistryToken string
-	RuntimeEnabled       bool
-	RuntimeRegistry      string
-	RuntimeRepository    string
-	RuntimeVersion       string
-	RuntimeOrasVersion   string
 }
 
 const (
@@ -140,9 +127,6 @@ type templateData struct {
 	IsGPUNode            bool
 	KubeletNodeLabels    string
 	CRIOSocket           string
-	RuntimeCredentials   string // bash export block; Token value must never be logged
-	RuntimeInstallScript string // rendered by pkgruntime.InstallScript
-	RuntimeEnabled       bool
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
@@ -161,23 +145,6 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 		return "", fmt.Errorf("parse bootstrap template: %w", err)
 	}
 
-	runtimeCfg := pkgruntime.Config{
-		Enabled:     p.RuntimeEnabled,
-		Registry:    p.RuntimeRegistry,
-		Repository:  p.RuntimeRepository,
-		Version:     p.RuntimeVersion,
-		OrasVersion: p.RuntimeOrasVersion,
-		Username:    p.RuntimeRegistryUser,
-		Token:       p.RuntimeRegistryToken,
-	}
-	runtimeCfg.ApplyDefaults()
-
-	// Build the credentials block. Values are single-quoted; GitHub usernames and
-	// PATs contain only alphanumeric/dash/underscore chars so no escaping is needed.
-	// Token is embedded in user-data but never logged per security constraints.
-	runtimeCreds := "export CNLAB_REGISTRY_USER='" + runtimeCfg.Username + "'\n" +
-		"export CNLAB_REGISTRY_TOKEN='" + runtimeCfg.Token + "'"
-
 	d := templateData{
 		WGConfigB64:          base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
 		VpnIP:                p.VpnIP,
@@ -191,9 +158,6 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 		IsGPUNode:            p.IsGPUNode,
 		KubeletNodeLabels:    kubeletNodeLabels(p),
 		CRIOSocket:           crioSocket,
-		RuntimeCredentials:   runtimeCreds,
-		RuntimeInstallScript: pkgruntime.InstallScript(runtimeCfg),
-		RuntimeEnabled:       runtimeCfg.Enabled,
 	}
 
 	var out bytes.Buffer
@@ -410,19 +374,8 @@ ip -4 addr show wg0 | grep -Eq 'inet[[:space:]]+'"$NODE_IP"'([/[:space:]]|$)' ||
 report "WireGuard is ready on ${NODE_IP}"
 
 # -----------------------------------------------------------------------------
-# cnlab-runtime OCI artifact install (ORAS-based, replaces all source builds)
+# Standard CRI-O installation
 # -----------------------------------------------------------------------------
-# Credentials are set here and consumed by the install script below.
-# Token is embedded in user-data which is only accessible from the instance
-# itself via IMDSv2. It is NOT logged by this script.
-{{if .RuntimeEnabled}}
-{{.RuntimeCredentials}}
-
-{{.RuntimeInstallScript}}
-
-# Unset credentials immediately after the install script runs.
-unset CNLAB_REGISTRY_USER CNLAB_REGISTRY_TOKEN
-{{else}}
 report "Installing standard CRI-O ${K8S_MINOR}"
 mkdir -p /etc/apt/keyrings
 rm -f /etc/apt/keyrings/cri-o-apt-keyring.gpg
@@ -433,11 +386,9 @@ printf '%s\n' \
   > /etc/apt/sources.list.d/cri-o.list
 apt_update
 apt_install cri-o criu
-{{end}}
 
 # -----------------------------------------------------------------------------
 # CRI-O configuration drop-ins
-# Each file is only written if cnlab-runtime did not already install it.
 # -----------------------------------------------------------------------------
 report "Configuring CRI-O drop-ins"
 systemctl stop kubelet 2>/dev/null || true

@@ -466,9 +466,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving AWS credentials: %v", err))
 	}
 
-	runtimeCfg := pkgruntime.Config{}
-
-	result, err := awsprovision.ProvisionEC2Node(ctx, np, creds, vpnServerClient, netConfig, runtimeCfg)
+	result, err := awsprovision.ProvisionEC2Node(ctx, np, creds, vpnServerClient, netConfig)
 	// Always persist VPN allocation immediately — even on EC2 failure — so that
 	// cleanupVPNPeer can find and release the peer on the next retry instead of
 	// leaving it as an orphan and allocating yet another IP.
@@ -579,9 +577,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	}
 	log.Info("Creating GCP instance")
 
-	runtimeCfg := pkgruntime.Config{}
-
-	result, err := gcpprovision.ProvisionGCPNode(ctx, np, gcpprovision.ResolveGCPCredentials(secret), vpnServerClient, netConfig, runtimeCfg)
+	result, err := gcpprovision.ProvisionGCPNode(ctx, np, gcpprovision.ResolveGCPCredentials(secret), vpnServerClient, netConfig)
 	if result != nil && result.VpnIP != "" {
 		if uErr := r.updateNetConfigStatus(ctx, netConfig, result.VpnIP, result.PublicKey, name); uErr != nil {
 			log.Error(uErr, "persisting VPN allocation to NetConfig (non-fatal)")

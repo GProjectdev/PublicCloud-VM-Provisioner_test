@@ -18,7 +18,6 @@ import (
 	"golang.org/x/oauth2/google"
 
 	mlv1alpha1 "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
-	pkgruntime "dcn.ssu.ac.kr/infra/pkg/runtime"
 	sshhelper "dcn.ssu.ac.kr/infra/pkg/ssh"
 	awsbootstrap "dcn.ssu.ac.kr/infra/provider/aws"
 	onprem "dcn.ssu.ac.kr/infra/provider/onprem"
@@ -92,7 +91,6 @@ func ProvisionGCPNode(
 	creds GCPCredentials,
 	vpnServerClient *sshhelper.Client,
 	netNodeConfig *mlv1alpha1.NodeProvisionNetConfig,
-	runtimeCfg pkgruntime.Config,
 ) (*ProvisionResult, error) {
 	name := nodeProvision.Name
 	log.Printf("[INFO] NodeProvision/%s: GCP validation successful", name)
@@ -151,13 +149,6 @@ func ProvisionGCPNode(
 		Labels:                 labels,
 		SSHUsername:            nodeProvision.Spec.SSHUsernameOverride,
 		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
-		RuntimeRegistryUser:    runtimeCfg.Username,
-		RuntimeRegistryToken:   runtimeCfg.Token,
-		RuntimeEnabled:         runtimeCfg.Enabled,
-		RuntimeRegistry:        runtimeCfg.Registry,
-		RuntimeRepository:      runtimeCfg.Repository,
-		RuntimeVersion:         runtimeCfg.Version,
-		RuntimeOrasVersion:     runtimeCfg.OrasVersion,
 	})
 	if err != nil {
 		return &ProvisionResult{VpnIP: vpnIP, PublicKey: publicKey}, fmt.Errorf("building startup script: %w", err)
