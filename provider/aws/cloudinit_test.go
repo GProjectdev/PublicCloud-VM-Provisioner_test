@@ -23,4 +23,13 @@ func TestStartupScriptUsesStandardCRIOWhenCustomRuntimeDisabled(t *testing.T) {
 	if strings.Contains(script, "Installing cnlab-runtime") {
 		t.Fatal("startup script unexpectedly installs cnlab-runtime")
 	}
+	for _, legacyPath := range []string{
+		`runtime_path = "/usr/bin/runc"`,
+		`conmon = "/usr/local/bin/conmon"`,
+		`runtime_path = "/usr/local/nvidia/toolkit/nvidia-container-runtime.cdi"`,
+	} {
+		if strings.Contains(script, legacyPath) {
+			t.Fatalf("startup script still configures legacy runtime path %q", legacyPath)
+		}
+	}
 }

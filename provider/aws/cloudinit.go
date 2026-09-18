@@ -399,6 +399,13 @@ rm -rf /run/crio /var/run/crio
 mkdir -p /run/crio /var/run/crio /var/lib/crio /var/lib/containers/storage
 mkdir -p /etc/crio/crio.conf.d /etc/containers /etc/cni/net.d /opt/cni/bin /etc/criu
 
+# Remove legacy overrides from the former custom runtime bootstrap. The CRI-O
+# package supplies a working crun/conmon configuration, and GPU Operator adds
+# NVIDIA handlers after the node joins the cluster.
+rm -f /etc/crio/crio.conf.d/10-paths.conf \
+      /etc/crio/crio.conf.d/999-runc.conf \
+      /etc/crio/crio.conf.d/9999-nvidia.conf
+
 if [ ! -f /etc/crictl.yaml ]; then
   cat > /etc/crictl.yaml <<CRICTL
 runtime-endpoint: unix://${CRIO_SOCKET}
@@ -407,46 +414,6 @@ timeout: 30s
 debug: false
 CRICTL
   chmod 0644 /etc/crictl.yaml
-fi
-
-# Only [crio.runtime] owns listen/conmon. Do not put listen under [crio.image].
-if [ ! -f /etc/crio/crio.conf.d/10-paths.conf ]; then
-  cat > /etc/crio/crio.conf.d/10-paths.conf <<'CRIOPATHS'
-[crio.runtime]
-  listen = "/var/run/crio/crio.sock"
-  conmon = "/usr/local/bin/conmon"
-CRIOPATHS
-fi
-
-if [ ! -f /etc/crio/crio.conf.d/999-runc.conf ]; then
-  cat > /etc/crio/crio.conf.d/999-runc.conf <<'RUNTIME'
-[crio]
-
-  [crio.runtime]
-    default_runtime = "runc"
-
-    [crio.runtime.runtimes]
-      [crio.runtime.runtimes.runc]
-        runtime_path = "/usr/bin/runc"
-        runtime_type = "oci"
-
-      [crio.runtime.runtimes.nvidia]
-        runtime_path = "/usr/bin/nvidia-container-runtime"
-        runtime_type = "oci"
-RUNTIME
-fi
-
-if [ ! -f /etc/crio/crio.conf.d/9999-nvidia.conf ]; then
-  cat > /etc/crio/crio.conf.d/9999-nvidia.conf <<'RUNTIME'
-[crio.runtime]
-  [crio.runtime.runtimes]
-    [crio.runtime.runtimes.nvidia]
-      runtime_path = "/usr/local/nvidia/toolkit/nvidia-container-runtime"
-      runtime_type = "oci"
-    [crio.runtime.runtimes.nvidia-cdi]
-      runtime_path = "/usr/local/nvidia/toolkit/nvidia-container-runtime.cdi"
-      runtime_type = "oci"
-RUNTIME
 fi
 
 if [ ! -f /etc/containers/policy.json ]; then
