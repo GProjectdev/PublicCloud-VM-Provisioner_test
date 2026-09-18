@@ -178,7 +178,7 @@ echo "node reset complete"
 // +kubebuilder:rbac:groups=ml.dcn.ssu.ac.kr,resources=nodeprovisionnetconfigs,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=ml.dcn.ssu.ac.kr,resources=nodeprovisionnetconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch;update;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // The controller-runtime cached client starts a cluster-scoped informer for
 // ConfigMaps, so list/watch are required even though reconciliation reads only
 // kube-public/cluster-info.
