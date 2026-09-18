@@ -281,8 +281,7 @@ wait_for_crio() {
   mkdir -p /run/crio /var/run/crio
   for i in $(seq 1 30); do
     if systemctl is-active --quiet crio && \
-       crictl --runtime-endpoint "unix://${CRIO_SOCKET}" \
-              --image-endpoint "unix://${CRIO_SOCKET}" info >/dev/null 2>&1; then
+       crio status info >/dev/null 2>&1; then
       report "CRI-O is ready"
       return 0
     fi
