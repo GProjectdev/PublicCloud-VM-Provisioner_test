@@ -468,8 +468,9 @@ apt_update
 
 report "Installing Kubernetes packages"
 apt_install "kubelet=${K8S_VERSION}-*" "kubeadm=${K8S_VERSION}-*" "kubectl=${K8S_VERSION}-*" \
+  cri-tools \
   --allow-change-held-packages --allow-downgrades
-apt-mark hold kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl cri-tools
 systemctl enable kubelet
 systemctl stop kubelet 2>/dev/null || true
 
@@ -491,6 +492,7 @@ systemctl daemon-reload
 # -----------------------------------------------------------------------------
 report "Performing final CRI-O health check before kubeadm join"
 restart_crio_and_wait
+command -v crictl >/dev/null
 crictl info >/dev/null
 
 # -----------------------------------------------------------------------------
