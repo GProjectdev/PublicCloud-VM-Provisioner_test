@@ -231,6 +231,7 @@ func ProvisionEC2Node(
 		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
 		RuntimeRegistryUser:    runtimeCfg.Username,
 		RuntimeRegistryToken:   runtimeCfg.Token,
+		RuntimeEnabled:         runtimeCfg.Enabled,
 		RuntimeRegistry:        runtimeCfg.Registry,
 		RuntimeRepository:      runtimeCfg.Repository,
 		RuntimeVersion:         runtimeCfg.Version,

@@ -9,6 +9,9 @@ import "fmt"
 // SSH exec does not write to bash history; the token is not logged by the
 // caller because runPhases only logs phase names, not individual commands.
 func InstallSteps(cfg Config) []string {
+	if !cfg.Enabled {
+		return nil
+	}
 	cfg.ApplyDefaults()
 	return []string{
 		installOrasCmd(cfg),
@@ -21,6 +24,9 @@ func InstallSteps(cfg Config) []string {
 // template. It references $CNLAB_REGISTRY_USER and $CNLAB_REGISTRY_TOKEN
 // which must be exported by the caller before this block runs.
 func InstallScript(cfg Config) string {
+	if !cfg.Enabled {
+		return ""
+	}
 	cfg.ApplyDefaults()
 	return fmt.Sprintf(`
 # -----------------------------------------------------------------------------

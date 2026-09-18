@@ -11,6 +11,7 @@ const (
 // already extracted from the Kubernetes Secret. The Token field must never
 // be logged.
 type Config struct {
+	Enabled     bool
 	Registry    string
 	Repository  string
 	Version     string
@@ -21,6 +22,9 @@ type Config struct {
 
 // ApplyDefaults fills zero-value fields with the package defaults.
 func (c *Config) ApplyDefaults() {
+	if !c.Enabled {
+		return
+	}
 	if c.Registry == "" {
 		c.Registry = DefaultRegistry
 	}

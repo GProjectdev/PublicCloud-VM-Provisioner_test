@@ -35,6 +35,7 @@ type CloudInitParams struct {
 	// Token must never be logged.
 	RuntimeRegistryUser  string
 	RuntimeRegistryToken string
+	RuntimeEnabled       bool
 	RuntimeRegistry      string
 	RuntimeRepository    string
 	RuntimeVersion       string
@@ -160,6 +161,7 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 	}
 
 	runtimeCfg := pkgruntime.Config{
+		Enabled:     p.RuntimeEnabled,
 		Registry:    p.RuntimeRegistry,
 		Repository:  p.RuntimeRepository,
 		Version:     p.RuntimeVersion,

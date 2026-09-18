@@ -2361,6 +2361,7 @@ func (r *NodeProvisionReconciler) resolveCnlabRuntimeConfig(
 ) (pkgruntime.Config, error) {
 	cfg := pkgruntime.Config{}
 	if softwareCfg.CnlabRuntime != nil {
+		cfg.Enabled = true
 		cr := softwareCfg.CnlabRuntime
 		cfg.Registry = cr.Registry
 		cfg.Repository = cr.Repository
