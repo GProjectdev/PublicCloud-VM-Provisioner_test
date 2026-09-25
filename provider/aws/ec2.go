@@ -129,6 +129,9 @@ func ValidateAWSConfig(spec mlv1alpha1.NodeProvisionSpec) error {
 	if awsCfg.SubnetID == "" {
 		return fmt.Errorf("spec.awsConfig.subnetId is required")
 	}
+	if spec.NetworkMode == "VPC" && (awsCfg.VPCID == "" || len(awsCfg.SecurityGroupIDs) == 0) {
+		return fmt.Errorf("VPC mode requires explicit vpcId and securityGroupIds")
+	}
 	return nil
 }
 
@@ -161,52 +164,61 @@ func ProvisionEC2Node(
 
 	name := nodeProvision.Name
 	log.Printf("[INFO] NodeProvision/%s: AWS validation successful", name)
+	directVPC := nodeProvision.Spec.NetworkMode == "VPC"
+	var vpnIP, publicKey, wgConfig string
+	var err error
+	if !directVPC {
+		if netNodeConfig.Spec.VPNRange == nil || vpnServerClient == nil {
+			return nil, fmt.Errorf("WireGuard mode requires vpnRange and VPN SSH connection")
+		}
 
-	// ── Allocate VPN IP ────────────────────────────────────────────────────
-	// AllocateVPNIP cross-checks both the CR's UsedIPAddresses and the live
-	// WireGuard peer list on the server, so the chosen IP is guaranteed free
-	// in both sources even if they have drifted.
-	vpnIP, err := onprem.AllocateVPNIP(
-		vpnServerClient,
-		*netNodeConfig.Spec.VPNRange,
-		netNodeConfig.Status.UsedIPAddresses,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("allocating VPN IP: %w", err)
-	}
-	log.Printf("[INFO] NodeProvision/%s: Assigned VPN IP %s", name, vpnIP)
+		// ── Allocate VPN IP ────────────────────────────────────────────────────
+		// AllocateVPNIP cross-checks both the CR's UsedIPAddresses and the live
+		// WireGuard peer list on the server, so the chosen IP is guaranteed free
+		// in both sources even if they have drifted.
+		vpnIP, err = onprem.AllocateVPNIP(
+			vpnServerClient,
+			*netNodeConfig.Spec.VPNRange,
+			netNodeConfig.Status.UsedIPAddresses,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("allocating VPN IP: %w", err)
+		}
+		log.Printf("[INFO] NodeProvision/%s: Assigned VPN IP %s", name, vpnIP)
 
-	// ── Generate WireGuard keypair ─────────────────────────────────────────
-	privateKey, publicKey, err := onprem.GenerateWireGuardKeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("generating WireGuard keypair: %w", err)
-	}
-	apiAllowedIP, err := onprem.KubernetesAPIAllowedIP(netNodeConfig.Status.ClusterJoinCommand)
-	if err != nil {
-		return nil, fmt.Errorf("resolving Kubernetes API route: %w", err)
-	}
+		// ── Generate WireGuard keypair ─────────────────────────────────────────
+		var privateKey string
+		privateKey, publicKey, err = onprem.GenerateWireGuardKeyPair()
+		if err != nil {
+			return nil, fmt.Errorf("generating WireGuard keypair: %w", err)
+		}
+		apiAllowedIP, err := onprem.KubernetesAPIAllowedIP(netNodeConfig.Status.ClusterJoinCommand)
+		if err != nil {
+			return nil, fmt.Errorf("resolving Kubernetes API route: %w", err)
+		}
 
-	// ── Build WireGuard client config ──────────────────────────────────────
-	wgConfig, err := onprem.BuildClientWGConfig(
-		vpnServerClient,
-		vpnIP,
-		*netNodeConfig.Spec.VPNRange,
-		netNodeConfig.Spec.VPNServerPublicConfig.PublicIP,
-		parsePort(netNodeConfig.Spec.VPNServerPublicConfig.VPNPort, 51820),
-		privateKey,
-		[]string{apiAllowedIP},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("building WireGuard client config: %w", err)
-	}
+		// ── Build WireGuard client config ──────────────────────────────────────
+		wgConfig, err = onprem.BuildClientWGConfig(
+			vpnServerClient,
+			vpnIP,
+			*netNodeConfig.Spec.VPNRange,
+			netNodeConfig.Spec.VPNServerPublicConfig.PublicIP,
+			parsePort(netNodeConfig.Spec.VPNServerPublicConfig.VPNPort, 51820),
+			privateKey,
+			[]string{apiAllowedIP},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("building WireGuard client config: %w", err)
+		}
 
-	// ── Register peer on VPN server ────────────────────────────────────────
-	// Must happen before the instance boots so the server is ready to accept
-	// the WireGuard handshake that cloud-init initiates.
-	if err := onprem.RegisterVPNPeer(vpnServerClient, publicKey, vpnIP); err != nil {
-		return nil, fmt.Errorf("registering VPN peer: %w", err)
+		// ── Register peer on VPN server ────────────────────────────────────────
+		// Must happen before the instance boots so the server is ready to accept
+		// the WireGuard handshake that cloud-init initiates.
+		if err := onprem.RegisterVPNPeer(vpnServerClient, publicKey, vpnIP); err != nil {
+			return nil, fmt.Errorf("registering VPN peer: %w", err)
+		}
+		log.Printf("[INFO] NodeProvision/%s: VPN peer registered (vpnIP=%s)", name, vpnIP)
 	}
-	log.Printf("[INFO] NodeProvision/%s: VPN peer registered (vpnIP=%s)", name, vpnIP)
 
 	// ── Parse Kubernetes version ───────────────────────────────────────────
 	clean := strings.TrimPrefix(netNodeConfig.Spec.SoftwareConfig.KubernetesVersion, "v")
@@ -222,7 +234,8 @@ func ProvisionEC2Node(
 		labels = append(labels, fmt.Sprintf("hardware-type=%s", nodeProvision.Spec.NodeLabel))
 	}
 
-	userDataB64 := BuildUserData(CloudInitParams{
+	script, err := BuildStartupScript(CloudInitParams{
+		DirectVPC:              directVPC,
 		WGConfig:               wgConfig,
 		VpnIP:                  vpnIP,
 		JoinCommand:            netNodeConfig.Status.ClusterJoinCommand,
@@ -233,6 +246,10 @@ func ProvisionEC2Node(
 		SSHUsername:            nodeProvision.Spec.SSHUsernameOverride,
 		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
 	})
+	if err != nil {
+		return &ProvisionResult{VpnIP: vpnIP, PublicKey: publicKey}, err
+	}
+	userDataB64 := encodeScript(script)
 
 	// ── Create EC2 instance ────────────────────────────────────────────────
 	// vpnResult carries VPN allocation data so the caller can persist it even
@@ -242,6 +259,25 @@ func ProvisionEC2Node(
 	ec2Client, err := newEC2Client(ctx, nodeProvision.Spec.Region, creds)
 	if err != nil {
 		return vpnResult, fmt.Errorf("creating EC2 client: %w", err)
+	}
+	if directVPC {
+		cfg := nodeProvision.Spec.AWSConfig
+		subnets, err := ec2Client.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{SubnetIds: []string{cfg.SubnetID}})
+		if err != nil {
+			return vpnResult, fmt.Errorf("validating VPC subnet: %w", err)
+		}
+		if len(subnets.Subnets) != 1 || awssdk.ToString(subnets.Subnets[0].VpcId) != cfg.VPCID {
+			return vpnResult, fmt.Errorf("subnet does not belong to configured VPC %s", cfg.VPCID)
+		}
+		groups, err := ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{GroupIds: cfg.SecurityGroupIDs})
+		if err != nil {
+			return vpnResult, fmt.Errorf("validating VPC security groups: %w", err)
+		}
+		for _, group := range groups.SecurityGroups {
+			if awssdk.ToString(group.VpcId) != cfg.VPCID {
+				return vpnResult, fmt.Errorf("security group %s does not belong to VPC %s", awssdk.ToString(group.GroupId), cfg.VPCID)
+			}
+		}
 	}
 
 	log.Printf("[INFO] NodeProvision/%s: Creating EC2 instance (type=%s region=%s)",
@@ -315,6 +351,8 @@ func WaitForInstanceRunning(
 
 // TerminateInstance terminates an EC2 instance as part of deprovisioning.
 // The call is idempotent — terminating an already-terminated instance is a no-op.
+var ErrInstanceTerminationPending = errors.New("EC2 instance termination is pending")
+
 func TerminateInstance(
 	ctx context.Context,
 	nodeProvision *mlv1alpha1.NodeProvision,
@@ -333,13 +371,30 @@ func TerminateInstance(
 	})
 	if err != nil {
 		// Already terminated is fine.
-		if strings.Contains(err.Error(), "InvalidInstanceID") {
+		if strings.Contains(err.Error(), "InvalidInstanceID.NotFound") {
 			log.Printf("[INFO] NodeProvision/%s: Instance %s already gone", name, instanceID)
 			return nil
 		}
 		return fmt.Errorf("terminating instance %s: %w", instanceID, err)
 	}
 	log.Printf("[INFO] NodeProvision/%s: Instance %s termination initiated", name, instanceID)
+	if nodeProvision.Spec.NetworkMode == "VPC" {
+		out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
+		if err != nil {
+			if strings.Contains(err.Error(), "InvalidInstanceID.NotFound") {
+				return nil
+			}
+			return fmt.Errorf("confirming instance termination: %w", err)
+		}
+		for _, reservation := range out.Reservations {
+			for _, instance := range reservation.Instances {
+				if awssdk.ToString(instance.InstanceId) == instanceID && instance.State != nil && instance.State.Name == types.InstanceStateNameTerminated {
+					return nil
+				}
+			}
+		}
+		return ErrInstanceTerminationPending
+	}
 	return nil
 }
 
@@ -799,6 +854,15 @@ func buildRunInstancesInput(np *mlv1alpha1.NodeProvision, userDataB64 string) *e
 
 	if len(np.Spec.AWSConfig.SecurityGroupIDs) > 0 {
 		input.NetworkInterfaces[0].Groups = np.Spec.AWSConfig.SecurityGroupIDs
+	}
+	if np.Spec.AWSConfig.AssociatePublicIP != nil {
+		input.NetworkInterfaces[0].AssociatePublicIpAddress = np.Spec.AWSConfig.AssociatePublicIP
+	}
+	if np.Spec.NetworkMode == "VPC" {
+		input.MetadataOptions = &types.InstanceMetadataOptionsRequest{
+			HttpEndpoint: types.InstanceMetadataEndpointStateEnabled,
+			HttpTokens:   types.HttpTokensStateRequired,
+		}
 	}
 
 	if np.Spec.AWSConfig.KeyPairName != "" {

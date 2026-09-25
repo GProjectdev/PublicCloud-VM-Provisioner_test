@@ -1,0 +1,12 @@
+# Minimal NetConfig for AWS VPC-mode NodeProvision workers.
+# Keep status out of this manifest; the controller owns status.
+# Set kubernetesVersion to the exact master/control-plane version.
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvisionNetConfig
+metadata:
+  name: aws-vpc-netconfig
+  namespace: default
+spec:
+  clusterName: aws-member-cluster
+  softwareConfig:
+    kubernetesVersion: "v1.34.2"

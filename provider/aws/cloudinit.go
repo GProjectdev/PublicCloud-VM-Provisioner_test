@@ -16,6 +16,7 @@ import (
 // driver, container toolkit, CRI-O NVIDIA integration, CDI and device plugin after
 // the node joins the cluster.
 type CloudInitParams struct {
+	DirectVPC              bool
 	WGConfig               string
 	VpnIP                  string
 	JoinCommand            string
@@ -70,10 +71,10 @@ func BuildStartupScript(p CloudInitParams) (string, error) {
 }
 
 func validateParams(p CloudInitParams) error {
-	if strings.TrimSpace(p.WGConfig) == "" {
+	if !p.DirectVPC && strings.TrimSpace(p.WGConfig) == "" {
 		return fmt.Errorf("WGConfig must not be empty")
 	}
-	if !ipRE.MatchString(strings.TrimSpace(p.VpnIP)) {
+	if !p.DirectVPC && !ipRE.MatchString(strings.TrimSpace(p.VpnIP)) {
 		return fmt.Errorf("VpnIP contains invalid characters")
 	}
 	if !versionRE.MatchString(strings.TrimPrefix(strings.TrimSpace(p.KubernetesVersion), "v")) {
@@ -115,18 +116,19 @@ func encodeScript(script string) string {
 }
 
 type templateData struct {
-	WGConfigB64          string
-	VpnIP                string
-	JoinCommand          string
-	JoinCommandB64       string
-	KubernetesVersion    string
-	KubernetesMinor      string
-	NodeName             string
-	SSHUsername          string
-	HasSSHUsername       bool
-	IsGPUNode            bool
-	KubeletNodeLabels    string
-	CRIOSocket           string
+	DirectVPC         bool
+	WGConfigB64       string
+	VpnIP             string
+	JoinCommand       string
+	JoinCommandB64    string
+	KubernetesVersion string
+	KubernetesMinor   string
+	NodeName          string
+	SSHUsername       string
+	HasSSHUsername    bool
+	IsGPUNode         bool
+	KubeletNodeLabels string
+	CRIOSocket        string
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
@@ -136,6 +138,9 @@ func kubeletNodeLabels(p CloudInitParams) string {
 	// These are the same GPU identity labels applied authoritatively by the
 	// kubeadm control-plane reconciler after the worker joins. Setting them at
 	// registration time avoids a window where the GPU worker is unclassified.
+	if p.DirectVPC {
+		return "hardware-type=gpu,gpu=on,ml.dcn.ssu.ac.kr/provider=AWS"
+	}
 	return "hardware-type=gpu,gpu=on,ml.dcn.ssu.ac.kr/provider=OnPrem"
 }
 
@@ -146,18 +151,19 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 	}
 
 	d := templateData{
-		WGConfigB64:          base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
-		VpnIP:                p.VpnIP,
-		JoinCommand:          p.JoinCommand,
-		JoinCommandB64:       base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
-		KubernetesVersion:    strings.TrimPrefix(p.KubernetesVersion, "v"),
-		KubernetesMinor:      strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
-		NodeName:             p.NodeName,
-		SSHUsername:          p.SSHUsername,
-		HasSSHUsername:       p.SSHUsername != "",
-		IsGPUNode:            p.IsGPUNode,
-		KubeletNodeLabels:    kubeletNodeLabels(p),
-		CRIOSocket:           crioSocket,
+		DirectVPC:         p.DirectVPC,
+		WGConfigB64:       base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
+		VpnIP:             p.VpnIP,
+		JoinCommand:       p.JoinCommand,
+		JoinCommandB64:    base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
+		KubernetesVersion: strings.TrimPrefix(p.KubernetesVersion, "v"),
+		KubernetesMinor:   strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
+		NodeName:          p.NodeName,
+		SSHUsername:       p.SSHUsername,
+		HasSSHUsername:    p.SSHUsername != "",
+		IsGPUNode:         p.IsGPUNode,
+		KubeletNodeLabels: kubeletNodeLabels(p),
+		CRIOSocket:        crioSocket,
 	}
 
 	var out bytes.Buffer
@@ -347,8 +353,18 @@ wait_for_apt
 dpkg --configure -a
 apt_update
 apt_install ca-certificates curl gnupg apt-transport-https lsof jq \
-  wireguard iproute2 socat conntrack
+  iproute2 socat conntrack
 
+{{if .DirectVPC}}
+report "Discovering primary EC2 private IPv4 address"
+IMDS_TOKEN="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)"
+NODE_IP="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/local-ipv4)"
+ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -Fx "$NODE_IP" >/dev/null || {
+  report "EC2 private IPv4 is not assigned locally"
+  exit 1
+}
+{{else}}
+apt_install wireguard
 report "Configuring WireGuard"
 mkdir -p /etc/wireguard
 printf '%s' '{{.WGConfigB64}}' | base64 -d > /etc/wireguard/wg0.conf
@@ -371,6 +387,7 @@ ip -4 addr show wg0 | grep -Eq 'inet[[:space:]]+'"$NODE_IP"'([/[:space:]]|$)' ||
   exit 1
 }
 report "WireGuard is ready on ${NODE_IP}"
+{{end}}
 
 # -----------------------------------------------------------------------------
 # Standard CRI-O installation

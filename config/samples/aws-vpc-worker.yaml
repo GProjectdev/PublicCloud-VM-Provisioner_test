@@ -1,0 +1,36 @@
+# AWS VPC-mode worker sample.
+# networkMode defaults to the existing WireGuard path when omitted.
+# Set networkMode: VPC only when the worker can reach the master through
+# AWS VPC/CNI networking without a VPN secret or WireGuard config.
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvision
+metadata:
+  name: aws-vpc-worker-001
+  namespace: default
+spec:
+  provider: AWS
+  networkMode: VPC
+  role: worker
+  nodeLabel: gpu
+  hardwareType: gpu
+  region: ap-northeast-2
+  instanceType: g5.xlarge
+  marketType: OnDemand
+  credentialsRef:
+    name: aws-node-credentials
+    namespace: default
+  awsConfig:
+    availabilityZone: ap-northeast-2c
+    vpcId: vpc-0123456789abcdef0
+    subnetId: subnet-0123456789abcdef0
+    securityGroupIds:
+      - sg-0123456789abcdef0
+    # true: public subnet with direct internet egress.
+    # false: private subnet with NAT Gateway/Instance egress.
+    # Omit to keep the existing AWS path default.
+    associatePublicIP: true
+    rootVolumeSizeGB: 100
+    tags:
+      Name: aws-vpc-worker-001
+      network-mode: vpc
+      workload: gpu-training

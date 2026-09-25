@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -439,18 +440,21 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 	}
 
 	// ── Connect to VPN server ───────────────────────────────────────────────
-	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseConfiguringVPN, "Configuring VPN client", 15)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
-		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
-			return ctrl.Result{}, err
+	var vpnServerClient *ssh.Client
+	if np.Spec.NetworkMode != "VPC" {
+		r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseConfiguringVPN, "Configuring VPN client", 15)
+		if sErr := r.Status().Update(ctx, np); sErr != nil {
+			if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
-	}
 
-	vpnServerClient, err := r.getVPNServerSSHClient(ctx, netConfig)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("connecting to VPN server: %w", err)
+		vpnServerClient, err = r.getVPNServerSSHClient(ctx, netConfig)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("connecting to VPN server: %w", err)
+		}
+		defer vpnServerClient.Conn.Close() //nolint:errcheck
 	}
-	defer vpnServerClient.Conn.Close() //nolint:errcheck
 
 	// ── Launch EC2 instance with cloud-init ─────────────────────────────────
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseCreatingInstance, "Creating EC2 instance", 25)
@@ -706,6 +710,9 @@ func (r *NodeProvisionReconciler) resolveAWSDefaults(
 	needsNetwork := np.Spec.AWSConfig == nil ||
 		np.Spec.AWSConfig.SubnetID == "" ||
 		len(np.Spec.AWSConfig.SecurityGroupIDs) == 0
+	if np.Spec.NetworkMode == "VPC" && (needsNetwork || np.Spec.AWSConfig.VPCID == "") {
+		return false, fmt.Errorf("VPC mode requires explicit awsConfig.vpcId, subnetId and securityGroupIds for the member cluster network")
+	}
 	needsAMI := np.Spec.AWSConfig == nil || np.Spec.AWSConfig.AMI == ""
 	needsInstanceType := np.Spec.InstanceType == ""
 	needsKeyPair := np.Spec.AWSConfig == nil || np.Spec.AWSConfig.KeyPairName == ""
@@ -866,6 +873,9 @@ func (r *NodeProvisionReconciler) reconcileWaitingForInstance(
 	now := metav1.Now()
 	np.Status.PrivateIP = privateIP
 	np.Status.PublicIP = publicIP
+	if np.Spec.NetworkMode == "VPC" {
+		np.Status.IPAddress = privateIP
+	}
 	np.Status.Phase = mlv1alpha1.NodeProvisionPhaseBootstrapping
 	np.Status.Message = "Instance running; cloud-init bootstrap in progress"
 	np.Status.Progress = 50
@@ -1089,10 +1099,19 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		return ctrl.Result{}, fmt.Errorf("listing nodes: %w", err)
 	}
 
-	targetIP := np.Status.IPAddress // VPN IP
+	targetIP := np.Status.IPAddress
+	if targetIP == "" {
+		return ctrl.Result{}, fmt.Errorf("node address has not been assigned")
+	}
 	var found *corev1.Node
 	for i := range nodeList.Items {
+		if np.Spec.NetworkMode == "VPC" && nodeList.Items[i].Name != np.Name {
+			continue
+		}
 		for _, addr := range nodeList.Items[i].Status.Addresses {
+			if np.Spec.NetworkMode == "VPC" && addr.Type != corev1.NodeInternalIP {
+				continue
+			}
 			if addr.Address == targetIP {
 				found = &nodeList.Items[i]
 				break
@@ -1112,7 +1131,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 			"lookingForIP", targetIP, "elapsed", elapsed)
 		now := metav1.Now()
 		np.Status.Phase = mlv1alpha1.NodeProvisionPhaseRegisteringNode
-		np.Status.Message = fmt.Sprintf("Waiting for node to register with control plane (VPN IP: %s)", targetIP)
+		np.Status.Message = fmt.Sprintf("Waiting for node to register with control plane (node IP: %s)", targetIP)
 		np.Status.Progress = 70
 		np.Status.LastUpdated = &now
 		_ = r.Status().Update(ctx, np)
@@ -1120,6 +1139,22 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 	}
 
 	log.Info("Node registered with control plane", "node", found.Name)
+	if np.Spec.NetworkMode == "VPC" {
+		ready := false
+		for _, condition := range found.Status.Conditions {
+			if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
+				ready = true
+			}
+		}
+		if !ready {
+			r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseVerifyingHealth, "Node registered; waiting for NodeReady=True", 80)
+			np.Status.NodeName = found.Name
+			if err := r.Status().Update(ctx, np); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: requeueJoining}, nil
+		}
+	}
 
 	// Stamp ownership labels + hardware-type label + management finalizer onto
 	// the Kubernetes Node object in a single patch.  We always do this so that
@@ -1465,6 +1500,12 @@ func buildPrepullScript(images []mlv1alpha1.ImagePrepull) string {
 // provisioning.  Both connect via the VPN IP that is reachable in-cluster.
 func (r *NodeProvisionReconciler) getSSHClientByProvider(ctx context.Context, np *mlv1alpha1.NodeProvision) (*ssh.Client, error) {
 	host := np.Status.VpnIP
+	if np.Spec.NetworkMode == "VPC" {
+		host = np.Status.PrivateIP
+		if host == "" {
+			return nil, fmt.Errorf("VPC node private IP has not been assigned")
+		}
+	}
 	if host == "" {
 		host = np.Spec.IPAddress
 		if host == "" {
@@ -1527,6 +1568,47 @@ func (r *NodeProvisionReconciler) getSSHClientPostJoin(ctx context.Context, np *
 // handleDelete – deprovisions and removes the finalizer
 // ────────────────────────────────────────────────────────────────────────────
 
+func (r *NodeProvisionReconciler) deleteProvisionedNode(ctx context.Context, np *mlv1alpha1.NodeProvision) (bool, error) {
+	name := np.Status.NodeName
+	if name == "" && np.Spec.NetworkMode == "VPC" {
+		name = np.Name
+	}
+	if name == "" {
+		return true, nil
+	}
+	node := &corev1.Node{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, node); err != nil {
+		return apierrors.IsNotFound(err), client.IgnoreNotFound(err)
+	}
+	if owner := node.Labels[nodeProvisionUIDLabel]; owner != "" && owner != string(np.UID) {
+		return false, fmt.Errorf("refusing to delete node %s owned by a different NodeProvision", name)
+	}
+	if np.Spec.NetworkMode == "VPC" && node.Labels[nodeProvisionUIDLabel] == "" {
+		matchesPrivateIP := false
+		for _, addr := range node.Status.Addresses {
+			if addr.Type == corev1.NodeInternalIP && np.Status.PrivateIP != "" && addr.Address == np.Status.PrivateIP {
+				matchesPrivateIP = true
+			}
+		}
+		if !matchesPrivateIP {
+			return false, fmt.Errorf("refusing to delete unowned node %s without matching EC2 private IP", name)
+		}
+	}
+	if controllerutil.ContainsFinalizer(node, nodeProvisionNodeFinalizer) {
+		patch := client.MergeFrom(node.DeepCopy())
+		controllerutil.RemoveFinalizer(node, nodeProvisionNodeFinalizer)
+		if err := r.Patch(ctx, node, patch); err != nil {
+			return apierrors.IsNotFound(err), client.IgnoreNotFound(err)
+		}
+	}
+	if node.DeletionTimestamp.IsZero() {
+		if err := r.Delete(ctx, node); err != nil {
+			return apierrors.IsNotFound(err), client.IgnoreNotFound(err)
+		}
+	}
+	return false, nil
+}
+
 func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alpha1.NodeProvision) (ctrl.Result, error) { //nolint:unparam
 	log := logf.FromContext(ctx)
 
@@ -1546,51 +1628,15 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 	np.Status.LastUpdated = &now
 	_ = r.Status().Update(ctx, np)
 
-	// ── Remove Kubernetes node ──────────────────────────────────────────────
-	nodeDeleted := false
-	if np.Status.NodeName != "" {
-		node := &corev1.Node{}
-		if err := r.Get(ctx, types.NamespacedName{Name: np.Status.NodeName}, node); err == nil {
-			// Strip our management finalizer first.  This is necessary because if
-			// the node already has a DeletionTimestamp (e.g. from a previous
-			// controller run that called Delete before crashing, or from a manual
-			// `kubectl delete node`), removing the last finalizer causes the API
-			// server to GC the node immediately — so the subsequent Delete call
-			// would hit "not found".  We handle that below with IgnoreNotFound.
-			if controllerutil.ContainsFinalizer(node, nodeProvisionNodeFinalizer) {
-				patch := client.MergeFrom(node.DeepCopy())
-				controllerutil.RemoveFinalizer(node, nodeProvisionNodeFinalizer)
-				if err := r.Patch(ctx, node, patch); err != nil {
-					log.Error(err, "removing node finalizer (continuing)", "node", np.Status.NodeName)
-				} else {
-					log.Info("Removed management finalizer from node", "node", np.Status.NodeName)
-				}
-			}
-			// If DeletionTimestamp is already set the API server will delete the
-			// node as soon as all finalizers are gone (handled above).  Calling
-			// Delete again is harmless but produces a confusing "not found" log
-			// line, so skip it in that case.
-			if node.DeletionTimestamp.IsZero() {
-				if err := r.Delete(ctx, node); client.IgnoreNotFound(err) != nil {
-					log.Error(err, "deleting node from cluster", "node", np.Status.NodeName)
-				} else if err == nil {
-					log.Info("Removed node from cluster", "node", np.Status.NodeName)
-				}
-			} else {
-				log.Info("Node already terminating — finalizer removal will complete deletion", "node", np.Status.NodeName)
-			}
-		} else if apierrors.IsNotFound(err) {
-			nodeDeleted = true
-			log.Info("Node confirmed deleted from cluster", "node", np.Status.NodeName)
+	// Stop VPC workers first so kubelet cannot re-register a deleted Node.
+	if np.Spec.NetworkMode != "VPC" {
+		deleted, err := r.deleteProvisionedNode(ctx, np)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-	} else {
-		nodeDeleted = true
-	}
-
-	// ── Wait for node deletion confirmation before cleaning up AWS resources ──
-	if !nodeDeleted {
-		log.Info("Waiting for node to be deleted from cluster before cleaning up cloud resources")
-		return ctrl.Result{Requeue: true, RequeueAfter: 5 * time.Second}, nil
+		if !deleted {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 	}
 
 	// ── Provider-specific cleanup (must happen before secrets are deleted) ──────
@@ -1624,6 +1670,9 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 				terminateCreds = awsprovision.ResolveAWSCredentials(secret)
 			}
 			if err := awsprovision.TerminateInstance(ctx, np, terminateCreds, np.Status.InstanceID); err != nil {
+				if errors.Is(err, awsprovision.ErrInstanceTerminationPending) {
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
 				if awsprovision.IsAWSAuthFailure(err) {
 					// Cached STS session is likely expired. Evict the CredMgr cache so
 					// the next reconcile forces a fresh credential resolution, then
@@ -1632,6 +1681,9 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 					r.CredMgr.Evict(secret.Namespace, secret.Name)
 					staticCreds := awsprovision.StaticCredsNoSession(awsprovision.ResolveAWSCredentials(secret))
 					if retryErr := awsprovision.TerminateInstance(ctx, np, staticCreds, np.Status.InstanceID); retryErr != nil {
+						if errors.Is(retryErr, awsprovision.ErrInstanceTerminationPending) {
+							return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+						}
 						log.Error(retryErr, "EC2 termination failed after static-credential retry — requeuing with delay",
 							"instanceId", np.Status.InstanceID)
 						return ctrl.Result{RequeueAfter: 30 * time.Second},
@@ -1682,6 +1734,16 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 		r.cleanupOnPremNode(ctx, np)
 	}
 
+	if np.Spec.NetworkMode == "VPC" {
+		deleted, err := r.deleteProvisionedNode(ctx, np)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !deleted {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
+
 	// ── Remove VPN peer ─────────────────────────────────────────────────────
 	if err := r.cleanupVPNPeer(ctx, np); err != nil {
 		log.Error(err, "cleaning up VPN peer (continuing)")
@@ -1718,6 +1780,9 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 // The VPN server connection is always opened so the fallback can be attempted
 // even when the CR has no record of this peer.
 func (r *NodeProvisionReconciler) cleanupVPNPeer(ctx context.Context, np *mlv1alpha1.NodeProvision) error {
+	if np.Spec.NetworkMode == "VPC" {
+		return nil
+	}
 	log := logf.FromContext(ctx)
 
 	netConfigList := &mlv1alpha1.NodeProvisionNetConfigList{}
@@ -1888,11 +1953,18 @@ const joinTokenMaxAge = 20 * time.Hour
 // If the bootstrap token is absent or older than joinTokenMaxAge, the controller
 // creates a new one directly via the Kubernetes API — no SSH or external
 // dependency required.
-func (r *NodeProvisionReconciler) requireNetConfig(ctx context.Context, _ *mlv1alpha1.NodeProvision) (*mlv1alpha1.NodeProvisionNetConfig, error) {
+func (r *NodeProvisionReconciler) requireNetConfig(ctx context.Context, np *mlv1alpha1.NodeProvision) (*mlv1alpha1.NodeProvisionNetConfig, error) {
 	log := logf.FromContext(ctx)
 	netConfigList := &mlv1alpha1.NodeProvisionNetConfigList{}
-	if err := r.List(ctx, netConfigList); err != nil {
+	var options []client.ListOption
+	if np.Spec.NetworkMode == "VPC" {
+		options = append(options, client.InNamespace(np.Namespace))
+	}
+	if err := r.List(ctx, netConfigList, options...); err != nil {
 		return nil, fmt.Errorf("listing NodeProvisionNetConfigs: %w", err)
+	}
+	if np.Spec.NetworkMode == "VPC" && len(netConfigList.Items) > 1 {
+		return nil, fmt.Errorf("VPC mode requires exactly one NodeProvisionNetConfig in namespace %s", np.Namespace)
 	}
 	if len(netConfigList.Items) == 0 {
 		log.Info("No NodeProvisionNetConfig found yet; requeueing")

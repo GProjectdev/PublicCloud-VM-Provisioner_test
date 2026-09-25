@@ -43,12 +43,18 @@ spec:
                 description: AWSConfig holds provider-specific parameters for AWS
                   EC2 provisioning.
                 properties:
-                  availabilityZone:
-                    description: AvailabilityZone constrains instance and subnet selection
-                      to one AWS AZ, for example "ap-northeast-2c".
-                    type: string
                   ami:
                     description: AMI ID to use for the instance.
+                    type: string
+                  associatePublicIP:
+                    description: |-
+                      AssociatePublicIP controls public IPv4 allocation, not the Kubernetes node IP.
+                      Omit to preserve the existing public-subnet bootstrap behavior.
+                    type: boolean
+                  availabilityZone:
+                    description: |-
+                      AvailabilityZone constrains instance and subnet selection to one AWS AZ.
+                      For example, "ap-northeast-2c".
                     type: string
                   iamInstanceProfile:
                     description: IAM instance profile name or ARN for the instance.
@@ -129,7 +135,8 @@ spec:
                     format: int64
                     type: integer
                   scopes:
-                    description: Scopes are OAuth scopes for the attached service account.
+                    description: Scopes are OAuth scopes for the attached service
+                      account.
                     items:
                       type: string
                     type: array
@@ -169,6 +176,17 @@ spec:
                   MarketType selects regular on-demand capacity or provider spot/preemptible
                   capacity. Empty defaults to OnDemand.
                 type: string
+              networkMode:
+                default: WireGuard
+                description: NetworkMode selects direct AWS VPC networking or per-node
+                  WireGuard.
+                enum:
+                - WireGuard
+                - VPC
+                type: string
+                x-kubernetes-validations:
+                - message: networkMode is immutable
+                  rule: self == oldSelf
               nodeLabel:
                 type: string
               provider:
@@ -188,6 +206,9 @@ spec:
               sshUsernameOverride:
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: VPC networking requires the AWS provider
+              rule: self.networkMode != 'VPC' || self.provider == 'AWS'
           status:
             description: status defines the observed state of NodeProvision
             properties:

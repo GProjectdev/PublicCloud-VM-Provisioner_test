@@ -45,8 +45,8 @@ spec:
               softwareConfig:
                 properties:
                   cnlabRuntime:
-                    description: Deprecated. NodeProvision workers ignore this field
-                      and install standard CRI-O.
+                    description: 'Deprecated: NodeProvision workers ignore this field
+                      and install standard CRI-O.'
                     properties:
                       credentialsRef:
                         description: |-

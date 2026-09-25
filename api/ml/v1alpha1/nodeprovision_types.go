@@ -65,6 +65,10 @@ type CredentialsRef struct {
 
 // AWSConfig holds AWS-specific parameters for EC2 node provisioning.
 type AWSConfig struct {
+	// AssociatePublicIP controls public IPv4 allocation, not the Kubernetes node IP.
+	// Omit to preserve the existing public-subnet bootstrap behavior.
+	// +optional
+	AssociatePublicIP *bool `json:"associatePublicIP,omitempty"`
 	// AvailabilityZone constrains instance and subnet selection to one AWS AZ.
 	// For example, "ap-northeast-2c".
 	// +optional
@@ -133,8 +137,15 @@ type GCPConfig struct {
 }
 
 // NodeProvisionSpec defines the desired state of NodeProvision.
+// +kubebuilder:validation:XValidation:rule="self.networkMode != 'VPC' || self.provider == 'AWS'",message="VPC networking requires the AWS provider"
 type NodeProvisionSpec struct {
-	Provider CloudProvider `json:"provider,omitempty"`
+	// NetworkMode selects direct AWS VPC networking or per-node WireGuard.
+	// +kubebuilder:validation:Enum=WireGuard;VPC
+	// +kubebuilder:default=WireGuard
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkMode is immutable"
+	// +optional
+	NetworkMode string        `json:"networkMode,omitempty"`
+	Provider    CloudProvider `json:"provider,omitempty"`
 
 	// HardwareType classifies the node for image pre-pull targeting.
 	// "gpu" — node has GPUs; pulls images with nodeTarget "gpu" and "all".
