@@ -33,6 +33,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -268,7 +269,7 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			now := metav1.Now()
 			np.Status.Phase = mlv1alpha1.NodeProvisionPhaseWaitingForInstance
 			np.Status.LastUpdated = &now
-			_ = r.Status().Update(ctx, np)
+			_ = r.updateNodeProvisionStatus(ctx, np)
 			return ctrl.Result{RequeueAfter: requeueShort}, nil
 		}
 		log.Info("Instance creation in progress, requeueing")
@@ -330,7 +331,7 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		fresh.Status.Message = "Retrying after failure"
 		fresh.Status.LastUpdated = &now
 		log.Info("Retrying NodeProvision after failure — releasing stale VPN IP and resetting phase")
-		if err := r.Status().Update(ctx, fresh); err != nil {
+		if err := r.updateNodeProvisionStatus(ctx, fresh); err != nil {
 			// Another reconcile won the race — its reset will trigger re-provisioning.
 			log.Info("Phase reset race lost, other reconcile already reset", "err", err)
 			return ctrl.Result{}, nil
@@ -395,7 +396,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 			now := metav1.Now()
 			np.Status.Phase = mlv1alpha1.NodeProvisionPhaseWaitingForInstance
 			np.Status.LastUpdated = &now
-			if err := r.Status().Update(ctx, np); err != nil {
+			if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -426,7 +427,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 
 	// ── Set Validating status (non-critical; ignore conflict on the first run) ─
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseValidating, "Validating AWS configuration", 5)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
+	if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 		// Re-fetch so subsequent updates use the current ResourceVersion.
 		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 			return ctrl.Result{}, err
@@ -443,7 +444,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 	var vpnServerClient *ssh.Client
 	if np.Spec.NetworkMode != "VPC" {
 		r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseConfiguringVPN, "Configuring VPN client", 15)
-		if sErr := r.Status().Update(ctx, np); sErr != nil {
+		if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 			if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -458,7 +459,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 
 	// ── Launch EC2 instance with cloud-init ─────────────────────────────────
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseCreatingInstance, "Creating EC2 instance", 25)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
+	if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -505,7 +506,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 	if np.Status.StartTime == nil {
 		np.Status.StartTime = &now
 	}
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating NodeProvision status with InstanceID: %w", err)
 	}
 	log.Info("EC2 instance created, waiting for it to become running", "instanceId", result.InstanceID)
@@ -528,7 +529,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 			now := metav1.Now()
 			np.Status.Phase = mlv1alpha1.NodeProvisionPhaseWaitingForInstance
 			np.Status.LastUpdated = &now
-			if err := r.Status().Update(ctx, np); err != nil {
+			if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -549,7 +550,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	log.Info("GCP validation successful")
 
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseValidating, "Validating GCP configuration", 5)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
+	if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -561,7 +562,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	}
 
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseConfiguringVPN, "Configuring VPN client", 15)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
+	if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -574,7 +575,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	defer vpnServerClient.Conn.Close() //nolint:errcheck
 
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseCreatingInstance, "Creating GCP instance", 25)
-	if sErr := r.Status().Update(ctx, np); sErr != nil {
+	if sErr := r.updateNodeProvisionStatus(ctx, np); sErr != nil {
 		if err := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -609,7 +610,7 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 	if np.Status.StartTime == nil {
 		np.Status.StartTime = &now
 	}
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating NodeProvision status with InstanceID: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: requeueShort}, nil
@@ -880,7 +881,7 @@ func (r *NodeProvisionReconciler) reconcileWaitingForInstance(
 	np.Status.Message = "Instance running; cloud-init bootstrap in progress"
 	np.Status.Progress = 50
 	np.Status.LastUpdated = &now
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating NodeProvision status: %w", err)
 	}
 	log.Info("Cloud instance running", "privateIP", privateIP, "publicIP", publicIP)
@@ -911,7 +912,7 @@ func (r *NodeProvisionReconciler) reconcileOnPremProvisioning(
 
 	// ── Phase: Validating ────────────────────────────────────────────────────
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseValidating, "Validating SSH connectivity", 5)
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		if ferr := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); ferr != nil {
 			return ctrl.Result{}, ferr
 		}
@@ -944,7 +945,7 @@ func (r *NodeProvisionReconciler) reconcileOnPremProvisioning(
 
 	// ── Phase: Configuring VPN ───────────────────────────────────────────────
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseConfiguringVPN, "Configuring WireGuard VPN", 15)
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		if ferr := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); ferr != nil {
 			sshClient.Conn.Close()
 			return ctrl.Result{}, ferr
@@ -959,7 +960,7 @@ func (r *NodeProvisionReconciler) reconcileOnPremProvisioning(
 
 	// ── Phase: Bootstrapping — launch background goroutine ───────────────────
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseBootstrapping, "Installing packages and joining cluster (background)", 25)
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		if ferr := r.Get(ctx, types.NamespacedName{Name: np.Name, Namespace: np.Namespace}, np); ferr != nil {
 			sshClient.Conn.Close()       //nolint:errcheck
 			vpnServerClient.Conn.Close() //nolint:errcheck
@@ -1063,7 +1064,7 @@ func (r *NodeProvisionReconciler) pollOnPremBootstrap(
 		np.Status.VpnIP = res.vpnIP
 		np.Status.Progress = 60
 		np.Status.LastUpdated = &now
-		if err := r.Status().Update(ctx, np); err != nil {
+		if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating NodeProvision status: %w", err)
 		}
 		log.Info("On-prem node provisioned, waiting for cluster join", "vpnIP", res.vpnIP)
@@ -1080,7 +1081,7 @@ func (r *NodeProvisionReconciler) pollOnPremBootstrap(
 			now := metav1.Now()
 			np.Status.Message = msg
 			np.Status.LastUpdated = &now
-			_ = r.Status().Update(ctx, np)
+			_ = r.updateNodeProvisionStatus(ctx, np)
 		}
 		log.Info("On-prem bootstrap in progress", "step", step)
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
@@ -1134,7 +1135,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		np.Status.Message = fmt.Sprintf("Waiting for node to register with control plane (node IP: %s)", targetIP)
 		np.Status.Progress = 70
 		np.Status.LastUpdated = &now
-		_ = r.Status().Update(ctx, np)
+		_ = r.updateNodeProvisionStatus(ctx, np)
 		return ctrl.Result{RequeueAfter: requeueJoining}, nil
 	}
 
@@ -1149,7 +1150,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		if !ready {
 			r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseVerifyingHealth, "Node registered; waiting for NodeReady=True", 80)
 			np.Status.NodeName = found.Name
-			if err := r.Status().Update(ctx, np); err != nil {
+			if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: requeueJoining}, nil
@@ -1257,7 +1258,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 			np.Status.Phase = mlv1alpha1.NodeProvisionPhasePrePullingImages
 			np.Status.Message = "Node joined; pre-pulling GPU images in background"
 			np.Status.Progress = 90
-			if err := r.Status().Update(ctx, np); err != nil {
+			if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 				return ctrl.Result{}, fmt.Errorf("updating NodeProvision status to PrePullingImages: %w", err)
 			}
 			log.Info("GPU node joined — starting image pre-pull",
@@ -1270,7 +1271,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 	np.Status.Message = "Node successfully joined cluster"
 	np.Status.Progress = 100
 	np.Status.CompletionTime = &now
-	if err := r.Status().Update(ctx, np); err != nil {
+	if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating NodeProvision status to Ready: %w", err)
 	}
 	log.Info("Node reached Ready state", "node", found.Name)
@@ -1317,7 +1318,7 @@ func (r *NodeProvisionReconciler) markNodeProvisionReady(ctx context.Context, np
 	np.Status.Progress = 100
 	np.Status.CompletionTime = &now
 	np.Status.LastUpdated = &now
-	return ctrl.Result{}, r.Status().Update(ctx, np)
+	return ctrl.Result{}, r.updateNodeProvisionStatus(ctx, np)
 }
 
 // reconcileImagePrepullJob manages a Kubernetes Job that pre-pulls images by
@@ -1626,7 +1627,7 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 	np.Status.Phase = mlv1alpha1.NodeProvisionPhaseDeleting
 	now := metav1.Now()
 	np.Status.LastUpdated = &now
-	_ = r.Status().Update(ctx, np)
+	_ = r.updateNodeProvisionStatus(ctx, np)
 
 	// Stop VPC workers first so kubelet cannot re-register a deleted Node.
 	if np.Spec.NetworkMode != "VPC" {
@@ -1701,7 +1702,7 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 			// Clear InstanceID so any duplicate or requeued reconcile skips
 			// termination instead of retrying with potentially stale credentials.
 			np.Status.InstanceID = ""
-			if statusErr := r.Status().Update(ctx, np); statusErr != nil {
+			if statusErr := r.updateNodeProvisionStatus(ctx, np); statusErr != nil {
 				log.Error(statusErr, "clearing InstanceID from status after termination (non-fatal)")
 			}
 		}
@@ -1726,7 +1727,7 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 			}
 			log.Info("GCP instance deletion initiated", "instanceId", np.Status.InstanceID)
 			np.Status.InstanceID = ""
-			if statusErr := r.Status().Update(ctx, np); statusErr != nil {
+			if statusErr := r.updateNodeProvisionStatus(ctx, np); statusErr != nil {
 				log.Error(statusErr, "clearing InstanceID from status after GCP deletion (non-fatal)")
 			}
 		}
@@ -2352,8 +2353,34 @@ func (r *NodeProvisionReconciler) updateNetConfigStatus(
 	return fmt.Errorf("updating NetConfig IP record: too many conflicts")
 }
 
+// updateNodeProvisionStatus persists Provisioner-owned status fields while
+// preserving status.spot, which is owned by the separate SpotWatcher controller.
+// It intentionally keeps the caller's resourceVersion so concurrent Provisioner
+// status changes still fail with the same optimistic-lock conflict as a raw
+// Status().Update.
+func (r *NodeProvisionReconciler) updateNodeProvisionStatus(ctx context.Context, np *mlv1alpha1.NodeProvision) error {
+	key := types.NamespacedName{Name: np.Name, Namespace: np.Namespace}
+	latest := &mlv1alpha1.NodeProvision{}
+	if err := r.Get(ctx, key, latest); err != nil {
+		return fmt.Errorf("fetching NodeProvision before status update: %w", err)
+	}
+	if np.UID != "" && latest.UID != np.UID {
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: mlv1alpha1.GroupVersion.Group, Resource: "nodeprovisions"},
+			np.Name,
+			fmt.Errorf("refusing to update status for recreated NodeProvision: stale UID %s, latest UID %s", np.UID, latest.UID),
+		)
+	}
+	if latest.Status.Spot != nil {
+		np.Status.Spot = latest.Status.Spot.DeepCopy()
+	} else {
+		np.Status.Spot = nil
+	}
+	return r.Status().Update(ctx, np)
+}
+
 // setPhaseStatus updates the in-memory phase, message, and progress fields.
-// Callers must call r.Status().Update to persist.
+// Callers must call r.updateNodeProvisionStatus to persist.
 func (r *NodeProvisionReconciler) setPhaseStatus(np *mlv1alpha1.NodeProvision, phase mlv1alpha1.NodeProvisionPhase, msg string, progress int) {
 	now := metav1.Now()
 	np.Status.Phase = phase
@@ -2370,7 +2397,7 @@ func (r *NodeProvisionReconciler) failNodeProvision(ctx context.Context, np *mlv
 	np.Status.Phase = mlv1alpha1.NodeProvisionPhaseFailed
 	np.Status.Message = msg
 	np.Status.LastUpdated = &now
-	_ = r.Status().Update(ctx, np)
+	_ = r.updateNodeProvisionStatus(ctx, np)
 	return ctrl.Result{RequeueAfter: requeueFailed}, nil
 }
 

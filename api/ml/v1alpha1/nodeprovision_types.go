@@ -237,6 +237,40 @@ type NodeProvisionStatus struct {
 
 	// Kubernetes node name after join.
 	NodeName string `json:"nodeName,omitempty"`
+
+	// ObservedCluster is set by Karmada status aggregation to record the member
+	// cluster that supplied this top-level status. The Provisioner does not author it.
+	// +optional
+	ObservedCluster string `json:"observedCluster,omitempty"`
+
+	// Spot is reserved for the SpotWatcher controller. The NodeProvision
+	// controller preserves this subtree but does not author it.
+	// +optional
+	Spot *NodeProvisionSpotStatus `json:"spot,omitempty"`
+}
+
+// NodeProvisionSpotStatus is the Spot interruption signal contract owned by
+// the separate SpotWatcher controller.
+type NodeProvisionSpotStatus struct {
+	// AtRisk reports whether the instance currently has an active interruption risk.
+	AtRisk bool `json:"atRisk,omitempty"`
+	// SignalType is the provider signal source, for example aws-spot-interruption.
+	SignalType string `json:"signalType,omitempty"`
+	// EventID identifies the provider event, when available.
+	EventID string `json:"eventID,omitempty"`
+	// NoticeTime is an RFC3339 timestamp for when the interruption notice was observed.
+	// +optional
+	NoticeTime string `json:"noticeTime,omitempty"`
+	// InterruptionTime is an RFC3339 timestamp for the expected interruption time.
+	// +optional
+	InterruptionTime string `json:"interruptionTime,omitempty"`
+	// Action is the provider action, for example terminate, stop, or hibernate.
+	Action string `json:"action,omitempty"`
+	// InstanceID is the cloud provider instance ID the signal applies to.
+	InstanceID string `json:"instanceID,omitempty"`
+	// LastHeartbeatTime is an RFC3339 timestamp for the last SpotWatcher heartbeat.
+	// +optional
+	LastHeartbeatTime string `json:"lastHeartbeatTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

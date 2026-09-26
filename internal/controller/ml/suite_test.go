@@ -19,7 +19,10 @@ package ml
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,9 +93,36 @@ var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()
 	Eventually(func() error {
-		return testEnv.Stop()
+		err := testEnv.Stop()
+		if runtime.GOOS == "windows" {
+			cleanupWindowsEnvtestProcesses()
+		}
+		if err != nil && runtime.GOOS == "windows" && strings.Contains(err.Error(), "not supported by windows") {
+			return nil
+		}
+		return err
 	}, time.Minute, time.Second).Should(Succeed())
 })
+
+func cleanupWindowsEnvtestProcesses() {
+	assetDir := testEnv.BinaryAssetsDirectory
+	if assetDir == "" {
+		assetDir = os.Getenv("KUBEBUILDER_ASSETS")
+	}
+	if assetDir == "" {
+		return
+	}
+	if absAssetDir, err := filepath.Abs(assetDir); err == nil {
+		assetDir = absAssetDir
+	}
+	assetDir = strings.ReplaceAll(assetDir, "'", "''")
+	script := "$assetDir = '" + assetDir + "'; " +
+		"Get-CimInstance Win32_Process | Where-Object { " +
+		"($_.Name -eq 'kube-apiserver.exe' -or $_.Name -eq 'etcd.exe') -and " +
+		"$_.ExecutablePath -like ($assetDir + '*') " +
+		"} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+	_ = exec.Command("powershell", "-NoProfile", "-Command", script).Run()
+}
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by
