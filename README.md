@@ -1,6 +1,6 @@
 # remote-cluster-provisioner
 
-Remote Cluster Provisioner provisions Kubernetes worker nodes across remote or cloud environments. The existing default `NodeProvision` network path remains WireGuard; AWS workers that should join through native VPC networking can opt in with `spec.networkMode: VPC`. See the Korean practical guide and samples in [`docs/aws-vpc-worker-guide.md`](docs/aws-vpc-worker-guide.md), [`config/samples/aws-vpc-worker.yaml`](config/samples/aws-vpc-worker.yaml), and [`config/samples/aws-vpc-netconfig.yaml`](config/samples/aws-vpc-netconfig.yaml).
+Remote Cluster Provisioner provisions Kubernetes worker nodes across remote or cloud environments. The existing default `NodeProvision` network path remains WireGuard; AWS workers that should join through native VPC networking can opt in with `spec.networkMode: VPC`. See the Korean practical guide and samples in [`docs/aws-vpc-worker-guide.md`](docs/aws-vpc-worker-guide.md), [`config/samples/aws-vpc-worker.yaml`](config/samples/aws-vpc-worker.yaml), and [`config/samples/aws-vpc-netconfig.yaml`](config/samples/aws-vpc-netconfig.yaml). Optional StatefulMigration node software bootstrap is documented in [`docs/node-software-guide.md`](docs/node-software-guide.md) with sample [`config/samples/aws-vpc-netconfig-stateful.yaml`](config/samples/aws-vpc-netconfig-stateful.yaml).
 
 ## Prerequisites
 ### Management cluster

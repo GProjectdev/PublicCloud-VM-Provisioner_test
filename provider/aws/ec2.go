@@ -244,7 +244,8 @@ func ProvisionEC2Node(
 		NodeName:               name,
 		Labels:                 labels,
 		SSHUsername:            nodeProvision.Spec.SSHUsernameOverride,
-		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
+		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu") || strings.EqualFold(nodeProvision.Spec.HardwareType, "gpu"),
+		NodeSoftware:           netNodeConfig.Spec.SoftwareConfig.NodeSoftware,
 	})
 	if err != nil {
 		return &ProvisionResult{VpnIP: vpnIP, PublicKey: publicKey}, err

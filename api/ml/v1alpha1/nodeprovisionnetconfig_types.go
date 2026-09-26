@@ -67,8 +67,8 @@ type ImagePrepull struct {
 	// Image is the fully-qualified container image reference.
 	Image string `json:"image"`
 	// NodeTarget controls which worker nodes pull this image.
-	// "gpu"  — GPU workers only.
-	// "all"  — every worker node (CPU and GPU).
+	// "gpu"  ??GPU workers only.
+	// "all"  ??every worker node (CPU and GPU).
 	// +kubebuilder:validation:Enum=gpu;all
 	// +kubebuilder:default=all
 	NodeTarget string `json:"nodeTarget,omitempty"`
@@ -88,9 +88,60 @@ type SoftwareConfig struct {
 	// +optional
 	ImagePullSecretRef *SecretKeyReference `json:"imagePullSecretRef,omitempty"`
 
-	// Deprecated: NodeProvision workers ignore this field and install standard CRI-O.
+	// Deprecated: NodeProvision workers ignore this field; use nodeSoftware for optional reviewed runtime.
 	// +optional
 	CnlabRuntime *CnlabRuntimeConfig `json:"cnlabRuntime,omitempty"`
+
+	// NodeSoftware optionally configures node-level software installed before the
+	// worker joins Kubernetes. When omitted, existing bootstrap behavior is
+	// preserved.
+	// +optional
+	NodeSoftware *NodeSoftwareConfig `json:"nodeSoftware,omitempty"`
+}
+
+// NodeSoftwareConfig defines optional software installed on a new worker node.
+// +kubebuilder:validation:XValidation:rule="has(self.runtimeProfile) && self.runtimeProfile == 'StatefulMigration' ? has(self.migrationRuntime) : !has(self.migrationRuntime)",message="migrationRuntime is required for StatefulMigration and forbidden otherwise"
+type NodeSoftwareConfig struct {
+	// RuntimeProfile selects the runtime software profile.
+	// +kubebuilder:validation:Enum=Standard;StatefulMigration
+	// +kubebuilder:default=Standard
+	// +optional
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
+
+	// NFSClient installs nfs-common and verifies mount.nfs is available.
+	// +optional
+	NFSClient bool `json:"nfsClient,omitempty"`
+
+	// GPUMode selects optional GPU integration mode.
+	// +kubebuilder:validation:Enum=None;DevicePlugin;DRA
+	// +kubebuilder:default=None
+	// +optional
+	GPUMode string `json:"gpuMode,omitempty"`
+
+	// MigrationRuntime pins the reviewed stateful-migration runtime package.
+	// Required for RuntimeProfile=StatefulMigration and forbidden for Standard.
+	// +optional
+	MigrationRuntime *MigrationRuntimeConfig `json:"migrationRuntime,omitempty"`
+}
+
+// MigrationRuntimeConfig identifies the reviewed stateful migration runtime
+// package and source revisions expected in its manifest.
+type MigrationRuntimeConfig struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^https://[^[:space:]'"<>?#]+$`
+	PackageURL string `json:"packageURL"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Fa-f0-9]{64}$`
+	PackageSHA256 string `json:"packageSHA256"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Fa-f0-9]{40}$`
+	CRIOCommit string `json:"crioCommit"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Fa-f0-9]{40}$`
+	CRIUCommit string `json:"criuCommit"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Fa-f0-9]{64}$`
+	AdapterSHA256 string `json:"adapterSHA256"`
 }
 
 // CnlabRuntimeConfig defines how to obtain the prebuilt cnlab-runtime OCI artifact.
@@ -109,7 +160,7 @@ type CnlabRuntimeConfig struct {
 	OrasVersion string `json:"orasVersion,omitempty"`
 	// CredentialsRef references a Secret with "username" and "token" keys
 	// for authenticating to the OCI registry. Follows the same pattern as
-	// VPNSSHCredentialsRef — set Name to enable secret lookup.
+	// VPNSSHCredentialsRef ??set Name to enable secret lookup.
 	// +optional
 	CredentialsRef VPNSSHCredentialsRef `json:"credentialsRef,omitempty"`
 }

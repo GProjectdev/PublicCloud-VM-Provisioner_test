@@ -26,3 +26,8 @@ go.work
 .claude
 *.swo
 *~
+
+# Local runtime package builds and Python test caches
+__pycache__/
+*.pyc
+*.deb

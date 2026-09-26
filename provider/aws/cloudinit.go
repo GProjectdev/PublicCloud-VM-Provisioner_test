@@ -8,13 +8,15 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	mlv1alpha1 "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
+	"dcn.ssu.ac.kr/infra/pkg/nodesoftware"
 )
 
 // CloudInitParams contains the values required to bootstrap an EC2 Kubernetes worker.
 //
-// NVIDIA/GPU configuration is intentionally absent. GPU Operator owns the NVIDIA
-// driver, container toolkit, CRI-O NVIDIA integration, CDI and device plugin after
-// the node joins the cluster.
+// GPU driver/toolkit installation belongs to the cluster's GPU addon manager.
+// NodeSoftware optionally selects a reviewed migration runtime and NFS client.
 type CloudInitParams struct {
 	DirectVPC              bool
 	WGConfig               string
@@ -27,7 +29,8 @@ type CloudInitParams struct {
 	SSHUsername            string
 	// IsGPUNode identifies this worker as a GPU node. It controls Kubernetes
 	// node labels only; GPU Operator owns all NVIDIA software/runtime setup.
-	IsGPUNode bool
+	IsGPUNode    bool
+	NodeSoftware *mlv1alpha1.NodeSoftwareConfig
 }
 
 const (
@@ -71,6 +74,12 @@ func BuildStartupScript(p CloudInitParams) (string, error) {
 }
 
 func validateParams(p CloudInitParams) error {
+	if err := nodesoftware.Validate(p.NodeSoftware, p.KubernetesVersion); err != nil {
+		return fmt.Errorf("node software: %w", err)
+	}
+	if p.NodeSoftware != nil && p.NodeSoftware.GPUMode != "" && p.NodeSoftware.GPUMode != "None" && !p.IsGPUNode {
+		return fmt.Errorf("GPU software mode requires hardwareType or nodeLabel gpu")
+	}
 	if !p.DirectVPC && strings.TrimSpace(p.WGConfig) == "" {
 		return fmt.Errorf("WGConfig must not be empty")
 	}
@@ -116,19 +125,21 @@ func encodeScript(script string) string {
 }
 
 type templateData struct {
-	DirectVPC         bool
-	WGConfigB64       string
-	VpnIP             string
-	JoinCommand       string
-	JoinCommandB64    string
-	KubernetesVersion string
-	KubernetesMinor   string
-	NodeName          string
-	SSHUsername       string
-	HasSSHUsername    bool
-	IsGPUNode         bool
-	KubeletNodeLabels string
-	CRIOSocket        string
+	DirectVPC          bool
+	WGConfigB64        string
+	VpnIP              string
+	JoinCommand        string
+	JoinCommandB64     string
+	KubernetesVersion  string
+	KubernetesMinor    string
+	NodeName           string
+	SSHUsername        string
+	HasSSHUsername     bool
+	IsGPUNode          bool
+	KubeletNodeLabels  string
+	CRIOSocket         string
+	NodeSoftwareScript string
+	HasNodeSoftware    bool
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
@@ -145,25 +156,31 @@ func kubeletNodeLabels(p CloudInitParams) string {
 }
 
 func renderBootstrapScript(p CloudInitParams) (string, error) {
+	softwareScript, err := nodesoftware.Render(p.NodeSoftware, p.KubernetesVersion)
+	if err != nil {
+		return "", err
+	}
 	tmpl, err := template.New("aws-cloud-init").Parse(bootstrapTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse bootstrap template: %w", err)
 	}
 
 	d := templateData{
-		DirectVPC:         p.DirectVPC,
-		WGConfigB64:       base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
-		VpnIP:             p.VpnIP,
-		JoinCommand:       p.JoinCommand,
-		JoinCommandB64:    base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
-		KubernetesVersion: strings.TrimPrefix(p.KubernetesVersion, "v"),
-		KubernetesMinor:   strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
-		NodeName:          p.NodeName,
-		SSHUsername:       p.SSHUsername,
-		HasSSHUsername:    p.SSHUsername != "",
-		IsGPUNode:         p.IsGPUNode,
-		KubeletNodeLabels: kubeletNodeLabels(p),
-		CRIOSocket:        crioSocket,
+		DirectVPC:          p.DirectVPC,
+		WGConfigB64:        base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
+		VpnIP:              p.VpnIP,
+		JoinCommand:        p.JoinCommand,
+		JoinCommandB64:     base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
+		KubernetesVersion:  strings.TrimPrefix(p.KubernetesVersion, "v"),
+		KubernetesMinor:    strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
+		NodeName:           p.NodeName,
+		SSHUsername:        p.SSHUsername,
+		HasSSHUsername:     p.SSHUsername != "",
+		IsGPUNode:          p.IsGPUNode,
+		KubeletNodeLabels:  kubeletNodeLabels(p),
+		CRIOSocket:         crioSocket,
+		NodeSoftwareScript: softwareScript,
+		HasNodeSoftware:    p.NodeSoftware != nil,
 	}
 
 	var out bytes.Buffer
@@ -221,6 +238,13 @@ if [[ -f "$COMPLETE_FILE" ]]; then
   report "Bootstrap already completed; nothing to do"
   exit 0
 fi
+{{if .HasNodeSoftware}}
+# A new-node profile is not permission to replace the runtime on a joined node.
+if [[ -f /etc/kubernetes/kubelet.conf ]]; then
+  report "Refusing node software bootstrap on an already joined node"
+  exit 1
+fi
+{{end}}
 
 K8S_VERSION="{{.KubernetesVersion}}"
 K8S_MINOR="{{.KubernetesMinor}}"
@@ -465,6 +489,9 @@ fi
 if [ ! -f /etc/criu/default.conf ]; then
   cp -f /etc/criu/runc.conf /etc/criu/default.conf
 fi
+
+# Optional node packages run before the runtime starts and before kubeadm join.
+{{.NodeSoftwareScript}}
 
 systemctl daemon-reload
 systemctl enable crio

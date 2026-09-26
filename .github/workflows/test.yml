@@ -21,3 +21,9 @@ jobs:
         run: |
           go mod tidy
           make test
+
+      - name: Node software packaging and addon scripts
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          bash -n scripts/install-gpu-addons.sh
+          bash scripts/tests/test-install-gpu-addons.sh

@@ -186,6 +186,10 @@ kubectl get nodeprovisionnetconfig aws-vpc-netconfig -o yaml
 
 샘플의 `spec.softwareConfig.kubernetesVersion`을 실제 master 버전으로 수정한다.
 
+## StatefulMigration node software
+
+새 AWS VPC worker에 StatefulMigration CRI-O/CRIU `.deb`, NFS client, GPU addon mode 의도를 넣어야 하면 [`docs/node-software-guide.md`](node-software-guide.md)와 선택 sample [`config/samples/aws-vpc-netconfig-stateful.yaml`](../config/samples/aws-vpc-netconfig-stateful.yaml)을 확인한다. NetConfig의 software block은 새 worker 생성 시점 입력이며, 기존 `Ready` 노드에 런타임을 rollout하지 않는다. 같은 namespace에는 NetConfig가 정확히 1개만 있어야 하므로 기존 `aws-vpc-netconfig`를 수정해서 사용한다.
+
 ## 8. VPC Worker 생성
 
 샘플을 실제 VPC 값으로 수정한 뒤 적용한다.

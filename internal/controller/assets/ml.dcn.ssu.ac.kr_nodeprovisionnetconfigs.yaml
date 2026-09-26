@@ -45,14 +45,14 @@ spec:
               softwareConfig:
                 properties:
                   cnlabRuntime:
-                    description: Deprecated. NodeProvision workers ignore this field
-                      and install standard CRI-O.
+                    description: 'Deprecated: NodeProvision workers ignore this field;
+                      use nodeSoftware for optional reviewed runtime.'
                     properties:
                       credentialsRef:
                         description: |-
                           CredentialsRef references a Secret with "username" and "token" keys
                           for authenticating to the OCI registry. Follows the same pattern as
-                          VPNSSHCredentialsRef — set Name to enable secret lookup.
+                          VPNSSHCredentialsRef ??set Name to enable secret lookup.
                         properties:
                           key:
                             description: Key is the data key within the secret that
@@ -93,8 +93,8 @@ spec:
                           default: all
                           description: |-
                             NodeTarget controls which worker nodes pull this image.
-                            "gpu"  — GPU workers only.
-                            "all"  — every worker node (CPU and GPU).
+                            "gpu"  ??GPU workers only.
+                            "all"  ??every worker node (CPU and GPU).
                           enum:
                           - gpu
                           - all
@@ -121,6 +121,64 @@ spec:
                     type: object
                   kubernetesVersion:
                     type: string
+                  nodeSoftware:
+                    description: |-
+                      NodeSoftware optionally configures node-level software installed before the
+                      worker joins Kubernetes. When omitted, existing bootstrap behavior is
+                      preserved.
+                    properties:
+                      gpuMode:
+                        default: None
+                        description: GPUMode selects optional GPU integration mode.
+                        enum:
+                        - None
+                        - DevicePlugin
+                        - DRA
+                        type: string
+                      migrationRuntime:
+                        description: |-
+                          MigrationRuntime pins the reviewed stateful-migration runtime package.
+                          Required for RuntimeProfile=StatefulMigration and forbidden for Standard.
+                        properties:
+                          adapterSHA256:
+                            pattern: ^[A-Fa-f0-9]{64}$
+                            type: string
+                          crioCommit:
+                            pattern: ^[A-Fa-f0-9]{40}$
+                            type: string
+                          criuCommit:
+                            pattern: ^[A-Fa-f0-9]{40}$
+                            type: string
+                          packageSHA256:
+                            pattern: ^[A-Fa-f0-9]{64}$
+                            type: string
+                          packageURL:
+                            pattern: ^https://[^[:space:]'"<>?#]+$
+                            type: string
+                        required:
+                        - adapterSHA256
+                        - crioCommit
+                        - criuCommit
+                        - packageSHA256
+                        - packageURL
+                        type: object
+                      nfsClient:
+                        description: NFSClient installs nfs-common and verifies mount.nfs
+                          is available.
+                        type: boolean
+                      runtimeProfile:
+                        default: Standard
+                        description: RuntimeProfile selects the runtime software profile.
+                        enum:
+                        - Standard
+                        - StatefulMigration
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: migrationRuntime is required for StatefulMigration
+                        and forbidden otherwise
+                      rule: 'has(self.runtimeProfile) && self.runtimeProfile == ''StatefulMigration''
+                        ? has(self.migrationRuntime) : !has(self.migrationRuntime)'
                 type: object
               vpnRange:
                 description: foo is an example field of NodeProvisionNetConfig. Edit
