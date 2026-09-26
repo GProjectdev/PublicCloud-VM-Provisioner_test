@@ -69,6 +69,26 @@ func TestNodeSoftwareFitsEC2UserDataLimit(t *testing.T) {
 	}
 }
 
+func TestNodeSoftwareKubernetes137(t *testing.T) {
+	p := softwareParams()
+	p.KubernetesVersion = "1.37.0"
+	p.KubernetesMinorVersion = "1.37"
+	p.NodeSoftware = migrationSoftware()
+	script, err := BuildStartupScript(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`K8S_VERSION="1.37.0"`, `K8S_MINOR="1.37"`, `"kubernetesMinor": "1.37"`, "nfs-common", "GPUMode=DRA"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("1.37 bootstrap missing %q", want)
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(BuildUserData(p))
+	if err != nil || len(data) == 0 || len(data) > 16*1024 {
+		t.Fatalf("invalid 1.37 EC2 user data: bytes=%d err=%v", len(data), err)
+	}
+}
+
 func TestNodeSoftwareRejectsIncompatibleGPUAndDRA(t *testing.T) {
 	for _, tc := range []struct {
 		name string

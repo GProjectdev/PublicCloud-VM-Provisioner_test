@@ -1,0 +1,20 @@
+# Fill package fields from the actual .deb manifest; use the server's exact patch version.
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvisionNetConfig
+metadata:
+  name: aws-vpc-netconfig
+  namespace: fluidcr-demo
+spec:
+  clusterName: aws
+  softwareConfig:
+    kubernetesVersion: v1.37.0
+    nodeSoftware:
+      runtimeProfile: StatefulMigration
+      nfsClient: true
+      gpuMode: DRA
+      migrationRuntime:
+        packageURL: https://__REPLACE_PUBLIC_HTTPS_HOST__/runtime.deb
+        packageSHA256: __REPLACE_HEX64_PACKAGE_SHA256__
+        crioCommit: __REPLACE_40_HEX_CRIO_COMMIT__
+        criuCommit: __REPLACE_40_HEX_CRIU_COMMIT__
+        adapterSHA256: __REPLACE_HEX64_ADAPTER_SHA256__
