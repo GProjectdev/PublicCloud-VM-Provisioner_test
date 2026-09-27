@@ -22,6 +22,49 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestKubeletServingCSRUsageCombinations(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		usages []certificatesv1.KeyUsage
+		want   bool
+	}{
+		{"two usages", []certificatesv1.KeyUsage{"digital signature", "server auth"}, true},
+		{"three usages", []certificatesv1.KeyUsage{"digital signature", "key encipherment", "server auth"}, true},
+		{"reordered", []certificatesv1.KeyUsage{"server auth", "digital signature"}, true},
+		{"empty", nil, false},
+		{"missing signature", []certificatesv1.KeyUsage{"key encipherment", "server auth"}, false},
+		{"missing server auth", []certificatesv1.KeyUsage{"digital signature", "key encipherment"}, false},
+		{"client auth", []certificatesv1.KeyUsage{"digital signature", "server auth", "client auth"}, false},
+		{"unknown", []certificatesv1.KeyUsage{"digital signature", "server auth", "unknown"}, false},
+		{"duplicate", []certificatesv1.KeyUsage{"digital signature", "server auth", "server auth"}, false},
+		{"extra usage", []certificatesv1.KeyUsage{"digital signature", "key encipherment", "server auth", "client auth"}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			np := trustedCSRTestNodeProvision()
+			node := trustedCSRTestNode("worker-a", "", "10.50.1.99")
+			csr := newServingCSR(t, "csr-usage", "worker-a", []string{"worker-a"}, []net.IP{net.ParseIP("10.50.1.99")})
+			csr.Spec.Usages = tt.usages
+			scheme := newCSRTestScheme(t)
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(np, node).Build()
+			r := &KubeletServingCSRApprover{Client: c, Scheme: scheme}
+			ok, reason, err := r.verifyKubeletServingCSR(context.Background(), csr)
+			if err != nil || ok != tt.want {
+				t.Fatalf("ok=%v want=%v reason=%s err=%v", ok, tt.want, reason, err)
+			}
+			if tt.want {
+				np.Status.InstanceID = ""
+				if err := c.Update(context.Background(), np); err != nil {
+					t.Fatal(err)
+				}
+				ok, _, err = r.verifyKubeletServingCSR(context.Background(), csr)
+				if err != nil || ok {
+					t.Fatalf("missing EC2 identity: ok=%v err=%v", ok, err)
+				}
+			}
+		})
+	}
+}
+
 func TestKubeletServingCSRApproverRequiresTrustedEC2Mapping(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

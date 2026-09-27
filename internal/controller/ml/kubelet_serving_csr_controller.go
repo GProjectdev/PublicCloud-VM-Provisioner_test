@@ -245,14 +245,22 @@ func nodeHasTrustedProvisionedAddress(node *corev1.Node, trusted map[string]bool
 }
 
 func hasExactServingUsages(usages []certificatesv1.KeyUsage) bool {
-	if len(usages) != 3 {
+	if len(usages) != 2 && len(usages) != 3 {
 		return false
 	}
 	seen := map[certificatesv1.KeyUsage]bool{}
 	for _, usage := range usages {
+		if seen[usage] {
+			return false
+		}
+		switch usage {
+		case certificatesv1.UsageDigitalSignature, certificatesv1.UsageKeyEncipherment, certificatesv1.UsageServerAuth:
+		default:
+			return false
+		}
 		seen[usage] = true
 	}
-	return seen[certificatesv1.UsageDigitalSignature] && seen[certificatesv1.UsageKeyEncipherment] && seen[certificatesv1.UsageServerAuth]
+	return seen[certificatesv1.UsageDigitalSignature] && seen[certificatesv1.UsageServerAuth]
 }
 
 func csrApprovedOrDenied(csr *certificatesv1.CertificateSigningRequest) bool {
