@@ -266,3 +266,37 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/aws-vpc-manager ./cmd
 전체 envtest/E2E는 실행하지 않았다. 샘플의 VPC/Subnet/SG ID, Kubernetes 버전과
 image는 실제 환경 값으로 바꿔야 한다. `networkMode`는 생성 후 변경할 수 없다.
 VPC CR 삭제 시 EC2 종료를 확인한 뒤 Kubernetes Node를 정리한다.
+
+## Kubelet serving certificate automation
+
+AWS NodeProvision workers enable kubelet serving certificate bootstrap during cloud-init only when the worker is explicitly opted in or its node software runtime profile is `StatefulMigration`. The bootstrap script discovers the EC2 instance ID with IMDSv2 and starts kubelet with `--provider-id=aws:///<instance-id>`; when serving TLS bootstrap is enabled, it sets `serverTLSBootstrap: true` in `/var/lib/kubelet/config.yaml` after `kubeadm join` writes the kubelet config.
+
+The controller includes a narrow kubelet-serving CSR approver for `kubernetes.io/kubelet-serving` CSRs. It approves only when all of the following are true:
+
+- the CSR requester and x509 subject are `system:node:<node>` in `system:nodes`;
+- the CSR usages are exactly digital signature, key encipherment, and server auth;
+- every requested IP SAN matches a trusted NodeProvision status IP (`status.privateIp`, `status.ipAddress`, or `status.vpnIp`), and every requested DNS SAN is exactly the authenticated Node name;
+- the Node has NodeProvision owner labels that point to a live AWS NodeProvision with the same immutable UID;
+- `NodeProvision.status.nodeName` matches the Node name;
+- `NodeProvision.status.instanceId` is non-empty; `node.spec.providerID` is not used as independent trust evidence because it is kubelet-supplied;
+- at least one Node IP address matches `NodeProvision.status.privateIp`, `status.ipAddress`, or `status.vpnIp`.
+
+The approver intentionally does not approve from node labels, node names, providerID, or CSR contents alone. If NodeProvision status lacks the controller-observed EC2 instance ID, the owner UID does not match, `status.nodeName` has not been set to the Node, or the Node address cannot be tied back to NodeProvision status, the CSR is left pending and rechecked later. It does not call AWS during approval and it does not make live AWS changes. Automatic approval is disabled by default and must be explicitly enabled with `--enable-kubelet-serving-csr-approval=true`.
+
+StatefulMigration bootstrap and provisioned Nodes are labeled `artifact-node=true` for artifact DaemonSet scheduling only. The controller does not automatically assert a `restore-from-file=true` capability label: the reviewed runtime package verifier checks manifest provenance and binary digests, but it does not prove a live restore-from-file operation. That capability needs a separate explicit admin/integration gate before scheduling workloads that require certified restore.
+
+The kubelet-serving trust bundle for checkpoint components is configurable and must point at the custom signer CA that signs kubelet serving certificates. The controller never falls back to the API-server CA. When configured, it copies the source bundle to ConfigMap `stateful-migration-system/kubelet-serving-ca` key `ca.crt` for the checkpoint Deployment to mount.
+
+Configurable controller flags:
+
+- `--kubelet-serving-ca-source-kind` (`ConfigMap` or `Secret`, default `ConfigMap`)
+- `--kubelet-serving-ca-source-namespace`
+- `--kubelet-serving-ca-source-name`
+- `--kubelet-serving-ca-source-key` (default `ca.crt`)
+- `--kubelet-serving-ca-target-namespace` (default `stateful-migration-system`)
+- `--kubelet-serving-ca-target-name` (default `kubelet-serving-ca`)
+- `--kubelet-serving-ca-target-key` (default `ca.crt`)
+- `--kubelet-serving-ca-sync-period` (default `5m`)
+- `--enable-kubelet-serving-csr-approval` (default `false`)
+
+Limitations: this depends on AWS workers bootstrapped with `serverTLSBootstrap: true`. Existing joined nodes need kubelet serving bootstrap enabled before they will request serving certificates. StatefulMigration GPU workers pass this NodeProvision creation/join readiness gate only after Kubernetes NodeReady, both `nvidia.com/gpu` capacity and allocatable are greater than zero, the configured custom kubelet-serving CA bundle is synced, and a bounded TLS handshake to kubelet port 10250 on the trusted NodeProvision IP succeeds with the trusted IP as the TLS server name. This is not an ongoing post-Ready health monitor. Kubernetes garbage-collects approved/issued CSRs, so StatefulMigration readiness does not depend on retained historical CSR objects. The controller only handles Kubernetes kubelet-serving CSRs; client CSRs and non-AWS/on-prem/GCP workers remain outside this automation.

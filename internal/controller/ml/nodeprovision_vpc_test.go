@@ -2,6 +2,7 @@ package ml
 
 import (
 	"context"
+	"crypto/x509"
 	"testing"
 
 	mlv1alpha1 "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
@@ -70,6 +71,54 @@ func TestVPCJoiningWaitsForReady(t *testing.T) {
 	}
 }
 
+func TestVPCJoiningLabelsStatefulMigrationArtifactNode(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := mlv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	np := &mlv1alpha1.NodeProvision{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default", UID: "test-worker"},
+		Spec:       mlv1alpha1.NodeProvisionSpec{Provider: mlv1alpha1.CloudProviderAWS, NetworkMode: "VPC", NodeLabel: "cpu"},
+		Status:     mlv1alpha1.NodeProvisionStatus{IPAddress: "10.50.1.99", PrivateIP: "10.50.1.99", InstanceID: "i-0123456789abcdef0"},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker"},
+		Status: corev1.NodeStatus{
+			Addresses:  []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.50.1.99"}},
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	netConfig := &mlv1alpha1.NodeProvisionNetConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "aws-vpc-netconfig", Namespace: "default"},
+		Spec:       mlv1alpha1.NodeProvisionNetConfigSpec{SoftwareConfig: mlv1alpha1.SoftwareConfig{NodeSoftware: &mlv1alpha1.NodeSoftwareConfig{RuntimeProfile: "StatefulMigration"}}},
+	}
+	caSource := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "serving-ca", Namespace: "kube-system"}, Data: map[string]string{"ca.crt": string(newTestCAPEM(t))}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(np).WithObjects(np, node, netConfig, caSource).Build()
+	r := &NodeProvisionReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		KubeletServingCA: KubeletServingCAConfig{SourceNamespace: "kube-system", SourceName: "serving-ca"},
+		KubeletServingTLSChecker: kubeletServingTLSCheckerFunc(func(context.Context, string, string, *x509.CertPool) error {
+			return nil
+		}),
+	}
+	if _, err := r.reconcileJoining(context.Background(), np); err != nil {
+		t.Fatal(err)
+	}
+	got := &corev1.Node{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "worker"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Labels["artifact-node"] != "true" {
+		t.Fatalf("StatefulMigration node missing artifact-node label: %#v", got.Labels)
+	}
+	if got.Labels["restore-from-file"] == "true" {
+		t.Fatalf("restore-from-file must not be asserted by NodeReady/runtime package verification alone: %#v", got.Labels)
+	}
+}
 func TestVPCNetConfigNamespaceIsolation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := mlv1alpha1.AddToScheme(scheme); err != nil {

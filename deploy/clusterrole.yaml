@@ -15,11 +15,23 @@ rules:
     resources: [secrets]
     verbs: [get, list, watch, create, update, patch, delete]
 
-  # Batch: jobs — NodeProvision controller creates/deletes image pre-pull Jobs
+  # Batch: jobs - NodeProvision controller creates/deletes image pre-pull Jobs
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [get, list, watch, create, delete]
 
+
+  # Certificates: approve kubelet serving CSRs after NodeProvision/EC2 identity checks.
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests]
+    verbs: [get, list, watch]
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests/approval]
+    verbs: [update]
+  - apiGroups: [certificates.k8s.io]
+    resources: [signers]
+    resourceNames: [kubernetes.io/kubelet-serving]
+    verbs: [approve]
   # Custom: RemoteCluster (infra.dcn.ssu.ac.kr/v1)
   - apiGroups: [infra.dcn.ssu.ac.kr]
     resources: [remoteclusters]
@@ -42,19 +54,19 @@ rules:
     resources: [nodeprovisions/finalizers, nodeprovisionnetconfigs/finalizers]
     verbs: [update]
 
-  # Core: configmaps — read cluster-info from kube-public to build kubeadm join
+  # Core: configmaps - read cluster-info from kube-public to build kubeadm join
   # commands (CA cert hash + API server URL).
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch, create, update, patch]
 
-  # Core: events — CRs may live in any namespace; controller-runtime records events
+  # Core: events - CRs may live in any namespace; controller-runtime records events
   # in the object's namespace, so this must be cluster-scoped.
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
 
-  # Porch / Nephio — only needed when RemoteCluster GitConfig is enabled.
+  # Porch / Nephio - only needed when RemoteCluster GitConfig is enabled.
   # Remove these rules if you are not running Porch/Nephio on this cluster.
   - apiGroups: [config.porch.kpt.dev]
     resources: [repositories]

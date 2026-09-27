@@ -112,6 +112,39 @@ func TestNodeSoftwareRejectsIncompatibleGPUAndDRA(t *testing.T) {
 	}
 }
 
+func TestKubeletServingTLSBootstrapGenerationIsOptIn(t *testing.T) {
+	standard := softwareParams()
+	standard.NodeSoftware = &api.NodeSoftwareConfig{NFSClient: true}
+	standardScript, err := BuildStartupScript(standard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(standardScript, "serverTLSBootstrap") {
+		t.Fatal("non-Stateful node software unexpectedly enables kubelet serving TLS bootstrap")
+	}
+
+	stateful := softwareParams()
+	stateful.NodeSoftware = migrationSoftware()
+	statefulScript, err := BuildStartupScript(stateful)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"serverTLSBootstrap: true", "artifact-node=true"} {
+		if !strings.Contains(statefulScript, want) {
+			t.Fatalf("StatefulMigration script missing %q", want)
+		}
+	}
+
+	explicit := softwareParams()
+	explicit.EnableKubeletServingTLSBootstrap = true
+	explicitScript, err := BuildStartupScript(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(explicitScript, "serverTLSBootstrap: true") {
+		t.Fatal("explicit kubelet serving TLS bootstrap opt-in was not rendered")
+	}
+}
 func TestNodeSoftwareNFSOnlyLeavesStandardRuntime(t *testing.T) {
 	p := softwareParams()
 	p.IsGPUNode = false

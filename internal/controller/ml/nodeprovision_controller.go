@@ -64,6 +64,10 @@ type NodeProvisionReconciler struct {
 	Scheme *runtime.Scheme
 	// CredMgr handles background refresh of AWS STS / MFA-backed sessions.
 	CredMgr *awsprovision.CredentialManager
+	// KubeletServingCA identifies the custom kubelet-serving signer CA bundle used by StatefulMigration readiness.
+	KubeletServingCA KubeletServingCAConfig
+	// KubeletServingTLSChecker verifies that kubelet has actually loaded the issued serving cert.
+	KubeletServingTLSChecker KubeletServingTLSChecker
 	// onPremJobs holds in-flight on-prem provisioning goroutines.
 	// Key: "<namespace>/<name>", Value: <-chan onPremJobResult
 	onPremJobs sync.Map
@@ -1157,6 +1161,10 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		}
 	}
 
+	statefulMigrationNode, err := r.statefulMigrationRequested(ctx, np)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	// Stamp ownership labels + hardware-type label + management finalizer onto
 	// the Kubernetes Node object in a single patch.  We always do this so that
 	// even nodes whose NodeProvision has no NodeLabel still carry the ownership
@@ -1181,6 +1189,9 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		// during cluster init) to schedule image pre-pull pods on the right nodes.
 		// Mirrors the labeling done by RemoteCluster reconcileWorker for SSH-joined nodes.
 		found.Labels["infra.dcn.ssu.ac.kr/worker"] = "true"
+		if statefulMigrationNode {
+			found.Labels["artifact-node"] = "true"
+		}
 		hwType := "cpu"
 		if strings.EqualFold(np.Spec.HardwareType, "gpu") || strings.Contains(np.Spec.NodeLabel, "gpu") {
 			hwType = "gpu"
@@ -1246,6 +1257,17 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 			sshClient.Conn.Close()
 			log.Info("GPU CDI configured on node", "node", found.Name)
 		}
+	}
+
+	if ok, reason, err := r.statefulMigrationReadiness(ctx, np, found); err != nil {
+		return ctrl.Result{}, fmt.Errorf("checking StatefulMigration readiness: %w", err)
+	} else if !ok {
+		r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseVerifyingHealth, reason, 85)
+		np.Status.NodeName = found.Name
+		if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: requeueJoining}, nil
 	}
 
 	// GPU nodes with images configured get an intermediate phase so the

@@ -29,8 +29,11 @@ type CloudInitParams struct {
 	SSHUsername            string
 	// IsGPUNode identifies this worker as a GPU node. It controls Kubernetes
 	// node labels only; GPU Operator owns all NVIDIA software/runtime setup.
-	IsGPUNode    bool
-	NodeSoftware *mlv1alpha1.NodeSoftwareConfig
+	IsGPUNode bool
+	// EnableKubeletServingTLSBootstrap opts this worker into kubelet serving cert requests.
+	// StatefulMigration NodeSoftware also enables it automatically.
+	EnableKubeletServingTLSBootstrap bool
+	NodeSoftware                     *mlv1alpha1.NodeSoftwareConfig
 }
 
 const (
@@ -125,34 +128,44 @@ func encodeScript(script string) string {
 }
 
 type templateData struct {
-	DirectVPC          bool
-	WGConfigB64        string
-	VpnIP              string
-	JoinCommand        string
-	JoinCommandB64     string
-	KubernetesVersion  string
-	KubernetesMinor    string
-	NodeName           string
-	SSHUsername        string
-	HasSSHUsername     bool
-	IsGPUNode          bool
-	KubeletNodeLabels  string
-	CRIOSocket         string
-	NodeSoftwareScript string
-	HasNodeSoftware    bool
+	DirectVPC                        bool
+	WGConfigB64                      string
+	VpnIP                            string
+	JoinCommand                      string
+	JoinCommandB64                   string
+	KubernetesVersion                string
+	KubernetesMinor                  string
+	NodeName                         string
+	SSHUsername                      string
+	HasSSHUsername                   bool
+	IsGPUNode                        bool
+	KubeletNodeLabels                string
+	CRIOSocket                       string
+	NodeSoftwareScript               string
+	HasNodeSoftware                  bool
+	EnableKubeletServingTLSBootstrap bool
+}
+
+func kubeletServingTLSBootstrapEnabled(p CloudInitParams) bool {
+	return p.EnableKubeletServingTLSBootstrap || (p.NodeSoftware != nil && p.NodeSoftware.RuntimeProfile == "StatefulMigration")
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
-	if !p.IsGPUNode {
-		return ""
+	labels := append([]string{}, p.Labels...)
+	if p.IsGPUNode {
+		// These are the same GPU identity labels applied authoritatively by the
+		// kubeadm control-plane reconciler after the worker joins. Setting them at
+		// registration time avoids a window where the GPU worker is unclassified.
+		if p.DirectVPC {
+			labels = append(labels, "hardware-type=gpu", "gpu=on", "ml.dcn.ssu.ac.kr/provider=AWS")
+		} else {
+			labels = append(labels, "hardware-type=gpu", "gpu=on", "ml.dcn.ssu.ac.kr/provider=OnPrem")
+		}
 	}
-	// These are the same GPU identity labels applied authoritatively by the
-	// kubeadm control-plane reconciler after the worker joins. Setting them at
-	// registration time avoids a window where the GPU worker is unclassified.
-	if p.DirectVPC {
-		return "hardware-type=gpu,gpu=on,ml.dcn.ssu.ac.kr/provider=AWS"
+	if p.NodeSoftware != nil && p.NodeSoftware.RuntimeProfile == "StatefulMigration" {
+		labels = append(labels, "artifact-node=true")
 	}
-	return "hardware-type=gpu,gpu=on,ml.dcn.ssu.ac.kr/provider=OnPrem"
+	return strings.Join(labels, ",")
 }
 
 func renderBootstrapScript(p CloudInitParams) (string, error) {
@@ -166,21 +179,22 @@ func renderBootstrapScript(p CloudInitParams) (string, error) {
 	}
 
 	d := templateData{
-		DirectVPC:          p.DirectVPC,
-		WGConfigB64:        base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
-		VpnIP:              p.VpnIP,
-		JoinCommand:        p.JoinCommand,
-		JoinCommandB64:     base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
-		KubernetesVersion:  strings.TrimPrefix(p.KubernetesVersion, "v"),
-		KubernetesMinor:    strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
-		NodeName:           p.NodeName,
-		SSHUsername:        p.SSHUsername,
-		HasSSHUsername:     p.SSHUsername != "",
-		IsGPUNode:          p.IsGPUNode,
-		KubeletNodeLabels:  kubeletNodeLabels(p),
-		CRIOSocket:         crioSocket,
-		NodeSoftwareScript: softwareScript,
-		HasNodeSoftware:    p.NodeSoftware != nil,
+		DirectVPC:                        p.DirectVPC,
+		WGConfigB64:                      base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
+		VpnIP:                            p.VpnIP,
+		JoinCommand:                      p.JoinCommand,
+		JoinCommandB64:                   base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
+		KubernetesVersion:                strings.TrimPrefix(p.KubernetesVersion, "v"),
+		KubernetesMinor:                  strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
+		NodeName:                         p.NodeName,
+		SSHUsername:                      p.SSHUsername,
+		HasSSHUsername:                   p.SSHUsername != "",
+		IsGPUNode:                        p.IsGPUNode,
+		KubeletNodeLabels:                kubeletNodeLabels(p),
+		CRIOSocket:                       crioSocket,
+		NodeSoftwareScript:               softwareScript,
+		HasNodeSoftware:                  p.NodeSoftware != nil,
+		EnableKubeletServingTLSBootstrap: kubeletServingTLSBootstrapEnabled(p),
 	}
 
 	var out bytes.Buffer
@@ -413,6 +427,15 @@ ip -4 addr show wg0 | grep -Eq 'inet[[:space:]]+'"$NODE_IP"'([/[:space:]]|$)' ||
 report "WireGuard is ready on ${NODE_IP}"
 {{end}}
 
+report "Discovering EC2 instance identity for kubelet provider-id"
+IMDS_TOKEN="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)"
+EC2_INSTANCE_ID="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/instance-id)"
+if [[ ! "$EC2_INSTANCE_ID" =~ ^i-[a-zA-Z0-9]+$ ]]; then
+  report "Invalid EC2 instance-id from IMDS: ${EC2_INSTANCE_ID}"
+  exit 1
+fi
+KUBELET_PROVIDER_ID="aws:///${EC2_INSTANCE_ID}"
+
 # -----------------------------------------------------------------------------
 # Standard CRI-O installation
 # -----------------------------------------------------------------------------
@@ -518,7 +541,7 @@ apt-mark hold kubelet kubeadm kubectl cri-tools
 systemctl enable kubelet
 systemctl stop kubelet 2>/dev/null || true
 
-KUBELET_ARGS="--node-ip=${NODE_IP}"
+KUBELET_ARGS="--node-ip=${NODE_IP} --provider-id=${KUBELET_PROVIDER_ID}"
 if [[ -n "{{.KubeletNodeLabels}}" ]]; then
   KUBELET_ARGS="${KUBELET_ARGS} --node-labels={{.KubeletNodeLabels}}"
 fi
@@ -564,9 +587,20 @@ done
 # kubeadm should have created kubelet configuration. Do not blindly restart it
 # until CRI-O is healthy; the systemd dependency also enforces the relationship.
 systemctl daemon-reload
+
+{{if .EnableKubeletServingTLSBootstrap}}
+report "Enabling kubelet serving certificate bootstrap"
+python3 - <<'PY'
+from pathlib import Path
+p = Path("/var/lib/kubelet/config.yaml")
+text = p.read_text()
+lines = [line for line in text.splitlines() if not line.startswith("serverTLSBootstrap:")]
+lines.append("serverTLSBootstrap: true")
+p.write_text("\n".join(lines) + "\n")
+PY
 systemctl restart kubelet
 wait_for_service_active kubelet 120
-
+{{end}}
 # Verify kubelet is talking to CRI-O. A running process alone is insufficient.
 for i in $(seq 1 30); do
   if systemctl is-active --quiet kubelet && crictl info >/dev/null 2>&1; then
