@@ -8,14 +8,17 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	mlv1alpha1 "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
+	"dcn.ssu.ac.kr/infra/pkg/nodesoftware"
 )
 
 // CloudInitParams contains the values required to bootstrap an EC2 Kubernetes worker.
 //
-// NVIDIA/GPU configuration is intentionally absent. GPU Operator owns the NVIDIA
-// driver, container toolkit, CRI-O NVIDIA integration, CDI and device plugin after
-// the node joins the cluster.
+// GPU driver/toolkit installation belongs to the cluster's GPU addon manager.
+// NodeSoftware optionally selects a reviewed migration runtime and NFS client.
 type CloudInitParams struct {
+	DirectVPC              bool
 	WGConfig               string
 	VpnIP                  string
 	JoinCommand            string
@@ -27,6 +30,10 @@ type CloudInitParams struct {
 	// IsGPUNode identifies this worker as a GPU node. It controls Kubernetes
 	// node labels only; GPU Operator owns all NVIDIA software/runtime setup.
 	IsGPUNode bool
+	// EnableKubeletServingTLSBootstrap opts this worker into kubelet serving cert requests.
+	// StatefulMigration NodeSoftware also enables it automatically.
+	EnableKubeletServingTLSBootstrap bool
+	NodeSoftware                     *mlv1alpha1.NodeSoftwareConfig
 }
 
 const (
@@ -70,10 +77,16 @@ func BuildStartupScript(p CloudInitParams) (string, error) {
 }
 
 func validateParams(p CloudInitParams) error {
-	if strings.TrimSpace(p.WGConfig) == "" {
+	if err := nodesoftware.Validate(p.NodeSoftware, p.KubernetesVersion); err != nil {
+		return fmt.Errorf("node software: %w", err)
+	}
+	if p.NodeSoftware != nil && p.NodeSoftware.GPUMode != "" && p.NodeSoftware.GPUMode != "None" && !p.IsGPUNode {
+		return fmt.Errorf("GPU software mode requires hardwareType or nodeLabel gpu")
+	}
+	if !p.DirectVPC && strings.TrimSpace(p.WGConfig) == "" {
 		return fmt.Errorf("WGConfig must not be empty")
 	}
-	if !ipRE.MatchString(strings.TrimSpace(p.VpnIP)) {
+	if !p.DirectVPC && !ipRE.MatchString(strings.TrimSpace(p.VpnIP)) {
 		return fmt.Errorf("VpnIP contains invalid characters")
 	}
 	if !versionRE.MatchString(strings.TrimPrefix(strings.TrimSpace(p.KubernetesVersion), "v")) {
@@ -115,49 +128,73 @@ func encodeScript(script string) string {
 }
 
 type templateData struct {
-	WGConfigB64          string
-	VpnIP                string
-	JoinCommand          string
-	JoinCommandB64       string
-	KubernetesVersion    string
-	KubernetesMinor      string
-	NodeName             string
-	SSHUsername          string
-	HasSSHUsername       bool
-	IsGPUNode            bool
-	KubeletNodeLabels    string
-	CRIOSocket           string
+	DirectVPC                        bool
+	WGConfigB64                      string
+	VpnIP                            string
+	JoinCommand                      string
+	JoinCommandB64                   string
+	KubernetesVersion                string
+	KubernetesMinor                  string
+	NodeName                         string
+	SSHUsername                      string
+	HasSSHUsername                   bool
+	IsGPUNode                        bool
+	KubeletNodeLabels                string
+	CRIOSocket                       string
+	NodeSoftwareScript               string
+	HasNodeSoftware                  bool
+	EnableKubeletServingTLSBootstrap bool
+}
+
+func kubeletServingTLSBootstrapEnabled(p CloudInitParams) bool {
+	return p.EnableKubeletServingTLSBootstrap || (p.NodeSoftware != nil && p.NodeSoftware.RuntimeProfile == "StatefulMigration")
 }
 
 func kubeletNodeLabels(p CloudInitParams) string {
-	if !p.IsGPUNode {
-		return ""
+	labels := append([]string{}, p.Labels...)
+	if p.IsGPUNode {
+		// These are the same GPU identity labels applied authoritatively by the
+		// kubeadm control-plane reconciler after the worker joins. Setting them at
+		// registration time avoids a window where the GPU worker is unclassified.
+		if p.DirectVPC {
+			labels = append(labels, "hardware-type=gpu", "gpu=on", "ml.dcn.ssu.ac.kr/provider=AWS")
+		} else {
+			labels = append(labels, "hardware-type=gpu", "gpu=on", "ml.dcn.ssu.ac.kr/provider=OnPrem")
+		}
 	}
-	// These are the same GPU identity labels applied authoritatively by the
-	// kubeadm control-plane reconciler after the worker joins. Setting them at
-	// registration time avoids a window where the GPU worker is unclassified.
-	return "hardware-type=gpu,gpu=on,ml.dcn.ssu.ac.kr/provider=OnPrem"
+	if p.NodeSoftware != nil && p.NodeSoftware.RuntimeProfile == "StatefulMigration" {
+		labels = append(labels, "artifact-node=true")
+	}
+	return strings.Join(labels, ",")
 }
 
 func renderBootstrapScript(p CloudInitParams) (string, error) {
+	softwareScript, err := nodesoftware.Render(p.NodeSoftware, p.KubernetesVersion)
+	if err != nil {
+		return "", err
+	}
 	tmpl, err := template.New("aws-cloud-init").Parse(bootstrapTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse bootstrap template: %w", err)
 	}
 
 	d := templateData{
-		WGConfigB64:          base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
-		VpnIP:                p.VpnIP,
-		JoinCommand:          p.JoinCommand,
-		JoinCommandB64:       base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
-		KubernetesVersion:    strings.TrimPrefix(p.KubernetesVersion, "v"),
-		KubernetesMinor:      strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
-		NodeName:             p.NodeName,
-		SSHUsername:          p.SSHUsername,
-		HasSSHUsername:       p.SSHUsername != "",
-		IsGPUNode:            p.IsGPUNode,
-		KubeletNodeLabels:    kubeletNodeLabels(p),
-		CRIOSocket:           crioSocket,
+		DirectVPC:                        p.DirectVPC,
+		WGConfigB64:                      base64.StdEncoding.EncodeToString([]byte(p.WGConfig)),
+		VpnIP:                            p.VpnIP,
+		JoinCommand:                      p.JoinCommand,
+		JoinCommandB64:                   base64.StdEncoding.EncodeToString([]byte(p.JoinCommand)),
+		KubernetesVersion:                strings.TrimPrefix(p.KubernetesVersion, "v"),
+		KubernetesMinor:                  strings.TrimPrefix(p.KubernetesMinorVersion, "v"),
+		NodeName:                         p.NodeName,
+		SSHUsername:                      p.SSHUsername,
+		HasSSHUsername:                   p.SSHUsername != "",
+		IsGPUNode:                        p.IsGPUNode,
+		KubeletNodeLabels:                kubeletNodeLabels(p),
+		CRIOSocket:                       crioSocket,
+		NodeSoftwareScript:               softwareScript,
+		HasNodeSoftware:                  p.NodeSoftware != nil,
+		EnableKubeletServingTLSBootstrap: kubeletServingTLSBootstrapEnabled(p),
 	}
 
 	var out bytes.Buffer
@@ -215,6 +252,13 @@ if [[ -f "$COMPLETE_FILE" ]]; then
   report "Bootstrap already completed; nothing to do"
   exit 0
 fi
+{{if .HasNodeSoftware}}
+# A new-node profile is not permission to replace the runtime on a joined node.
+if [[ -f /etc/kubernetes/kubelet.conf ]]; then
+  report "Refusing node software bootstrap on an already joined node"
+  exit 1
+fi
+{{end}}
 
 K8S_VERSION="{{.KubernetesVersion}}"
 K8S_MINOR="{{.KubernetesMinor}}"
@@ -347,8 +391,18 @@ wait_for_apt
 dpkg --configure -a
 apt_update
 apt_install ca-certificates curl gnupg apt-transport-https lsof jq \
-  wireguard iproute2 socat conntrack
+  iproute2 socat conntrack
 
+{{if .DirectVPC}}
+report "Discovering primary EC2 private IPv4 address"
+IMDS_TOKEN="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)"
+NODE_IP="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/local-ipv4)"
+ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -Fx "$NODE_IP" >/dev/null || {
+  report "EC2 private IPv4 is not assigned locally"
+  exit 1
+}
+{{else}}
+apt_install wireguard
 report "Configuring WireGuard"
 mkdir -p /etc/wireguard
 printf '%s' '{{.WGConfigB64}}' | base64 -d > /etc/wireguard/wg0.conf
@@ -371,6 +425,16 @@ ip -4 addr show wg0 | grep -Eq 'inet[[:space:]]+'"$NODE_IP"'([/[:space:]]|$)' ||
   exit 1
 }
 report "WireGuard is ready on ${NODE_IP}"
+{{end}}
+
+report "Discovering EC2 instance identity for kubelet provider-id"
+IMDS_TOKEN="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)"
+EC2_INSTANCE_ID="$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 15 --retry 5 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/instance-id)"
+if [[ ! "$EC2_INSTANCE_ID" =~ ^i-[a-zA-Z0-9]+$ ]]; then
+  report "Invalid EC2 instance-id from IMDS: ${EC2_INSTANCE_ID}"
+  exit 1
+fi
+KUBELET_PROVIDER_ID="aws:///${EC2_INSTANCE_ID}"
 
 # -----------------------------------------------------------------------------
 # Standard CRI-O installation
@@ -449,6 +513,9 @@ if [ ! -f /etc/criu/default.conf ]; then
   cp -f /etc/criu/runc.conf /etc/criu/default.conf
 fi
 
+# Optional node packages run before the runtime starts and before kubeadm join.
+{{.NodeSoftwareScript}}
+
 systemctl daemon-reload
 systemctl enable crio
 restart_crio_and_wait
@@ -474,7 +541,7 @@ apt-mark hold kubelet kubeadm kubectl cri-tools
 systemctl enable kubelet
 systemctl stop kubelet 2>/dev/null || true
 
-KUBELET_ARGS="--node-ip=${NODE_IP}"
+KUBELET_ARGS="--node-ip=${NODE_IP} --provider-id=${KUBELET_PROVIDER_ID}"
 if [[ -n "{{.KubeletNodeLabels}}" ]]; then
   KUBELET_ARGS="${KUBELET_ARGS} --node-labels={{.KubeletNodeLabels}}"
 fi
@@ -520,9 +587,20 @@ done
 # kubeadm should have created kubelet configuration. Do not blindly restart it
 # until CRI-O is healthy; the systemd dependency also enforces the relationship.
 systemctl daemon-reload
+
+{{if .EnableKubeletServingTLSBootstrap}}
+report "Enabling kubelet serving certificate bootstrap"
+python3 - <<'PY'
+from pathlib import Path
+p = Path("/var/lib/kubelet/config.yaml")
+text = p.read_text()
+lines = [line for line in text.splitlines() if not line.startswith("serverTLSBootstrap:")]
+lines.append("serverTLSBootstrap: true")
+p.write_text("\n".join(lines) + "\n")
+PY
 systemctl restart kubelet
 wait_for_service_active kubelet 120
-
+{{end}}
 # Verify kubelet is talking to CRI-O. A running process alone is insufficient.
 for i in $(seq 1 30); do
   if systemctl is-active --quiet kubelet && crictl info >/dev/null 2>&1; then

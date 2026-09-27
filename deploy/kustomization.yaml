@@ -13,7 +13,8 @@ resources:
   - deployment.yaml
 
 # Override the image tag for a specific release:
-#   kubectl apply -k deploy/ --image=ghcr.io/<ORG>/remote-cluster-provisioner:v1.2.3
+#   cd deploy && kustomize edit set image 'ghcr.io/<ORG>/remote-cluster-provisioner'=REGISTRY/IMAGE:TAG
+#   kubectl apply -k .
 # Or set it here:
 # images:
 #   - name: ghcr.io/<ORG>/remote-cluster-provisioner

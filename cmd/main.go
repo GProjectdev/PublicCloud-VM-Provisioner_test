@@ -20,7 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-
+	"time"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -29,6 +29,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -56,6 +57,15 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+func newKubeletServingCSRApprover(c client.Client, scheme *runtime.Scheme, kubeletServingCA mlcontroller.KubeletServingCAConfig, enabled bool) *mlcontroller.KubeletServingCSRApprover {
+	return &mlcontroller.KubeletServingCSRApprover{
+		Client:                          c,
+		Scheme:                          scheme,
+		KubeletServingCA:                kubeletServingCA,
+		EnableKubeletServingCSRApproval: enabled,
+	}
+}
+
 // nolint:gocyclo
 func main() {
 	var metricsAddr string
@@ -65,6 +75,9 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var kubeletServingCA mlcontroller.KubeletServingCAConfig
+	var enableKubeletServingCSRApproval bool
+	var kubeletServingCASyncPeriod time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -83,6 +96,15 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&kubeletServingCA.SourceKind, "kubelet-serving-ca-source-kind", "ConfigMap", "Source object kind for the custom kubelet-serving signer CA bundle: ConfigMap or Secret. The API-server CA is never used as a fallback.")
+	flag.StringVar(&kubeletServingCA.SourceNamespace, "kubelet-serving-ca-source-namespace", "", "Namespace containing the custom kubelet-serving signer CA bundle source. Required for StatefulMigration TLS readiness.")
+	flag.StringVar(&kubeletServingCA.SourceName, "kubelet-serving-ca-source-name", "", "Name of the custom kubelet-serving signer CA bundle source. Required for StatefulMigration TLS readiness.")
+	flag.StringVar(&kubeletServingCA.SourceKey, "kubelet-serving-ca-source-key", "ca.crt", "Data key containing the custom kubelet-serving signer CA PEM bundle in the source object.")
+	flag.StringVar(&kubeletServingCA.TargetNamespace, "kubelet-serving-ca-target-namespace", "stateful-migration-system", "Namespace where the checkpoint components read the kubelet-serving CA ConfigMap.")
+	flag.StringVar(&kubeletServingCA.TargetName, "kubelet-serving-ca-target-name", "kubelet-serving-ca", "ConfigMap name where the checkpoint components read the kubelet-serving CA bundle.")
+	flag.StringVar(&kubeletServingCA.TargetKey, "kubelet-serving-ca-target-key", "ca.crt", "Data key written to the checkpoint kubelet-serving CA ConfigMap.")
+	flag.BoolVar(&enableKubeletServingCSRApproval, "enable-kubelet-serving-csr-approval", false, "Enable automatic approval for verified kubernetes.io/kubelet-serving CSRs. Defaults false for upgrade safety.")
+	flag.DurationVar(&kubeletServingCASyncPeriod, "kubelet-serving-ca-sync-period", 5*time.Minute, "Periodic sync interval for copying the custom kubelet-serving CA source into the checkpoint ConfigMap.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -195,9 +217,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&mlcontroller.NodeProvisionReconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		CredMgr: credMgr,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		CredMgr:          credMgr,
+		KubeletServingCA: kubeletServingCA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "NodeProvision")
 		os.Exit(1)
@@ -207,6 +230,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "NodeProvisionNetConfig")
+		os.Exit(1)
+	}
+	if err := mgr.Add(&mlcontroller.KubeletServingCABundleSyncer{Client: mgr.GetClient(), Config: kubeletServingCA, Interval: kubeletServingCASyncPeriod}); err != nil {
+		setupLog.Error(err, "Failed to register kubelet serving CA syncer")
+		os.Exit(1)
+	}
+	if err := newKubeletServingCSRApprover(mgr.GetClient(), mgr.GetScheme(), kubeletServingCA, enableKubeletServingCSRApproval).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "KubeletServingCSRApprover")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

@@ -9,8 +9,11 @@ rules:
   resources:
   - configmaps
   verbs:
+  - create
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -45,6 +48,28 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests/approval
+  verbs:
+  - update
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - signers
+  resourceNames:
+  - kubernetes.io/kubelet-serving
+  verbs:
+  - approve
 - apiGroups:
   - infra.dcn.ssu.ac.kr
   resources:

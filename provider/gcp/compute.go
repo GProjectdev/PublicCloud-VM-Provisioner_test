@@ -153,7 +153,8 @@ func ProvisionGCPNode(
 		NodeName:               name,
 		Labels:                 labels,
 		SSHUsername:            nodeProvision.Spec.SSHUsernameOverride,
-		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu"),
+		IsGPUNode:              strings.EqualFold(nodeProvision.Spec.NodeLabel, "gpu") || strings.EqualFold(nodeProvision.Spec.HardwareType, "gpu"),
+		NodeSoftware:           netNodeConfig.Spec.SoftwareConfig.NodeSoftware,
 	})
 	if err != nil {
 		return &ProvisionResult{VpnIP: vpnIP, PublicKey: publicKey}, fmt.Errorf("building startup script: %w", err)
@@ -377,10 +378,10 @@ func buildInstance(np *mlv1alpha1.NodeProvision, startupScript string) map[strin
 			action = "STOP"
 		}
 		instance["scheduling"] = map[string]any{
-			"provisioningModel":        "SPOT",
+			"provisioningModel":         "SPOT",
 			"instanceTerminationAction": action,
-			"automaticRestart":         false,
-			"onHostMaintenance":        "TERMINATE",
+			"automaticRestart":          false,
+			"onHostMaintenance":         "TERMINATE",
 		}
 	}
 

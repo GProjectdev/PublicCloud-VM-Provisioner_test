@@ -19,7 +19,11 @@ package controller
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -89,6 +93,14 @@ var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()
 	err := testEnv.Stop()
+	if err != nil && runtime.GOOS == "windows" && strings.Contains(err.Error(), "not supported by windows") {
+		// Windows has no SIGTERM; stop only this test process's envtest children.
+		script := "Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq " + strconv.Itoa(os.Getpid()) +
+			" -and ($_.Name -eq 'kube-apiserver.exe' -or $_.Name -eq 'etcd.exe') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }"
+		output, cleanupErr := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput()
+		Expect(cleanupErr).NotTo(HaveOccurred(), string(output))
+		return
+	}
 	Expect(err).NotTo(HaveOccurred())
 })
 

@@ -52,6 +52,10 @@ func NewInClusterProvisioner(
 	reportStep func(string),
 	runtimeCfg pkgruntime.Config,
 ) (vpnNodeIP string, publicKey string, err error) {
+	if cfg := netNodeConfig.Spec.SoftwareConfig.NodeSoftware; cfg != nil &&
+		(cfg.NFSClient || cfg.MigrationRuntime != nil || (cfg.RuntimeProfile != "" && cfg.RuntimeProfile != "Standard") || (cfg.GPUMode != "" && cfg.GPUMode != "None")) {
+		return "", "", fmt.Errorf("nodeSoftware options require the AWS/GCP new-worker bootstrap; legacy OnPrem SSH provisioning is not a runtime upgrade path")
+	}
 	if reportStep == nil {
 		reportStep = func(string) {}
 	}

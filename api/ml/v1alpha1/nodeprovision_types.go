@@ -65,6 +65,10 @@ type CredentialsRef struct {
 
 // AWSConfig holds AWS-specific parameters for EC2 node provisioning.
 type AWSConfig struct {
+	// AssociatePublicIP controls public IPv4 allocation, not the Kubernetes node IP.
+	// Omit to preserve the existing public-subnet bootstrap behavior.
+	// +optional
+	AssociatePublicIP *bool `json:"associatePublicIP,omitempty"`
 	// AvailabilityZone constrains instance and subnet selection to one AWS AZ.
 	// For example, "ap-northeast-2c".
 	// +optional
@@ -133,8 +137,15 @@ type GCPConfig struct {
 }
 
 // NodeProvisionSpec defines the desired state of NodeProvision.
+// +kubebuilder:validation:XValidation:rule="self.networkMode != 'VPC' || self.provider == 'AWS'",message="VPC networking requires the AWS provider"
 type NodeProvisionSpec struct {
-	Provider CloudProvider `json:"provider,omitempty"`
+	// NetworkMode selects direct AWS VPC networking or per-node WireGuard.
+	// +kubebuilder:validation:Enum=WireGuard;VPC
+	// +kubebuilder:default=WireGuard
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkMode is immutable"
+	// +optional
+	NetworkMode string        `json:"networkMode,omitempty"`
+	Provider    CloudProvider `json:"provider,omitempty"`
 
 	// HardwareType classifies the node for image pre-pull targeting.
 	// "gpu" — node has GPUs; pulls images with nodeTarget "gpu" and "all".
@@ -226,6 +237,40 @@ type NodeProvisionStatus struct {
 
 	// Kubernetes node name after join.
 	NodeName string `json:"nodeName,omitempty"`
+
+	// ObservedCluster is set by Karmada status aggregation to record the member
+	// cluster that supplied this top-level status. The Provisioner does not author it.
+	// +optional
+	ObservedCluster string `json:"observedCluster,omitempty"`
+
+	// Spot is reserved for the SpotWatcher controller. The NodeProvision
+	// controller preserves this subtree but does not author it.
+	// +optional
+	Spot *NodeProvisionSpotStatus `json:"spot,omitempty"`
+}
+
+// NodeProvisionSpotStatus is the Spot interruption signal contract owned by
+// the separate SpotWatcher controller.
+type NodeProvisionSpotStatus struct {
+	// AtRisk reports whether the instance currently has an active interruption risk.
+	AtRisk bool `json:"atRisk,omitempty"`
+	// SignalType is the provider signal source, for example aws-spot-interruption.
+	SignalType string `json:"signalType,omitempty"`
+	// EventID identifies the provider event, when available.
+	EventID string `json:"eventID,omitempty"`
+	// NoticeTime is an RFC3339 timestamp for when the interruption notice was observed.
+	// +optional
+	NoticeTime string `json:"noticeTime,omitempty"`
+	// InterruptionTime is an RFC3339 timestamp for the expected interruption time.
+	// +optional
+	InterruptionTime string `json:"interruptionTime,omitempty"`
+	// Action is the provider action, for example terminate, stop, or hibernate.
+	Action string `json:"action,omitempty"`
+	// InstanceID is the cloud provider instance ID the signal applies to.
+	InstanceID string `json:"instanceID,omitempty"`
+	// LastHeartbeatTime is an RFC3339 timestamp for the last SpotWatcher heartbeat.
+	// +optional
+	LastHeartbeatTime string `json:"lastHeartbeatTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

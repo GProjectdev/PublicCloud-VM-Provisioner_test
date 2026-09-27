@@ -1,0 +1,25 @@
+# Optional NetConfig for new AWS VPC-mode workers that need StatefulMigration runtime bootstrap.
+# This sample is guarded: replace every __REPLACE_*__ value before applying.
+# Requires a controller/CRD version that supports spec.softwareConfig.nodeSoftware.
+# Existing Ready workers are not rolled or mutated by changing this NetConfig.
+apiVersion: ml.dcn.ssu.ac.kr/v1alpha1
+kind: NodeProvisionNetConfig
+metadata:
+  name: aws-vpc-netconfig
+  namespace: default
+spec:
+  clusterName: aws-member-cluster
+  softwareConfig:
+    kubernetesVersion: "v1.34.2"
+    nodeSoftware:
+      runtimeProfile: StatefulMigration
+      nfsClient: true
+      # None | DevicePlugin | DRA. DRA requires Kubernetes >= 1.34.2 and matching cluster GPU addons.
+      gpuMode: DRA
+      migrationRuntime:
+        # Public HTTPS only. Do not include userinfo or query parameters.
+        packageURL: "https://__REPLACE_PUBLIC_HTTPS_HOST__/__REPLACE_PATH__/stateful-migration-runtime_1.0.0-1_amd64.deb"
+        packageSHA256: "__REPLACE_HEX64_PACKAGE_SHA256__"
+        crioCommit: "__REPLACE_40_HEX_CRIO_COMMIT__"
+        criuCommit: "__REPLACE_40_HEX_CRIU_COMMIT__"
+        adapterSHA256: "__REPLACE_HEX64_ADAPTER_SHA256__"
