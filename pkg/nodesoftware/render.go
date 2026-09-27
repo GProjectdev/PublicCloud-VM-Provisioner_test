@@ -119,6 +119,11 @@ if not criu_version.strip():
     raise SystemExit("criu --version returned empty output")
 PY
 mkdir -p /etc/systemd/system/crio.service.d /etc/crio/crio.conf.d /etc/criu /etc/cdi /var/run/cdi
+# An explicit --config path must exist even when the distro supplies only drop-ins.
+if [ ! -e /etc/crio/crio.conf ]; then
+  touch /etc/crio/crio.conf
+  chmod 0644 /etc/crio/crio.conf
+fi
 cat >/etc/systemd/system/crio.service.d/20-stateful-migration.conf <<'EOF'
 [Service]
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -134,11 +139,9 @@ ensure_criu_plugin_dir() {
   conf="$1"
   mkdir -p "$(dirname "$conf")"
   touch "$conf"
-  if grep -q '^[[:space:]]*plugin-dir[[:space:]]' "$conf"; then
-    sed -i 's#^[[:space:]]*plugin-dir[[:space:]].*$#plugin-dir /usr/local/lib/criu#' "$conf"
-  else
-    printf '\nplugin-dir /usr/local/lib/criu\n' >>"$conf"
-  fi
+  # Migrate the unsupported legacy option and keep one effective libdir entry.
+  sed -i -E '/^[[:space:]]*(plugin-dir|libdir)[[:space:]]/d' "$conf"
+  printf '\nlibdir /usr/local/lib/criu\n' >>"$conf"
 }
 ensure_criu_plugin_dir /etc/criu/default.conf
 ensure_criu_plugin_dir /etc/criu/runc.conf

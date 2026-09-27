@@ -1,12 +1,64 @@
 package nodesoftware
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
 	api "dcn.ssu.ac.kr/infra/api/ml/v1alpha1"
 )
+
+func TestRuntimeConfigFilesPreserveBaseAndMigratePluginOption(t *testing.T) {
+	bash := os.Getenv("TEST_BASH")
+	if bash == "" {
+		var err error
+		bash, err = exec.LookPath("bash")
+		if err != nil {
+			t.Skip("bash unavailable")
+		}
+	}
+	script, err := Render(statefulConfig(), "v1.37.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(script, "mkdir -p /etc/systemd/system/crio.service.d")
+	if start < 0 {
+		t.Fatal("missing config setup start")
+	}
+	end := strings.Index(script[start:], "systemctl daemon-reload")
+	if end < 0 {
+		t.Fatal("missing config setup")
+	}
+	setup := script[start : start+end]
+	setup = strings.ReplaceAll(setup, "/etc/", "${root}/etc/")
+	setup = strings.ReplaceAll(setup, "/var/run/cdi", "${root}/var/run/cdi")
+	check := `set -eu
+root=$(mktemp -d)
+trap 'rm -rf "$root"' EXIT
+mkdir -p "$root/etc/criu"
+printf 'tcp-close\nplugin-dir /old\nlibdir /other\n' > "$root/etc/criu/default.conf"
+`
+	check += setup
+	check += `
+test -f "$root/etc/crio/crio.conf"
+printf '# existing configuration\n' > "$root/etc/crio/crio.conf"
+`
+	check += setup
+	check += `
+grep -qx '# existing configuration' "$root/etc/crio/crio.conf"
+grep -qx 'tcp-close' "$root/etc/criu/default.conf"
+for conf in "$root/etc/criu/default.conf" "$root/etc/criu/runc.conf"; do
+  ! grep -q '^plugin-dir' "$conf"
+  test "$(grep -c '^libdir ' "$conf")" = 1
+  grep -qx 'libdir /usr/local/lib/criu' "$conf"
+done
+`
+	cmd := exec.Command(bash, "-c", check)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("config setup: %v\n%s", err, out)
+	}
+}
 
 const (
 	hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

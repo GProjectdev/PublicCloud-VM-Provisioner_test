@@ -1,5 +1,7 @@
 # remote-cluster-provisioner
 
+CRI-O/CRIU bootstrap 설정 오류 수정 후 [Controller 이미지 갱신 절차](docs/controller-bootstrap-update.md)를 따른다. 기존 Ready NodeProvision은 유지한다.
+
 AWS 클러스터 재설치 후 Kubernetes 1.37과 준비된 runtime `.deb`로 다시 시작하려면 [재설치 가이드](docs/aws-cluster-reinstall-1.37.md)를 따른다.
 
 Kubernetes 1.37용 검증 패키지는 [`dist/stateful-migration-runtime_1.0.0-1_amd64.deb`](dist/stateful-migration-runtime_1.0.0-1_amd64.deb)에 있다. SHA-256은 `b068af75d8a43f8c0fb8422f22d7acfa5c88d520f48f8f4861a82aee2a6eb57d`이다.
