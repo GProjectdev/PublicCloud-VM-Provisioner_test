@@ -250,6 +250,10 @@ type NodeProvisionStatus struct {
 	// +optional
 	ObservedCluster string `json:"observedCluster,omitempty"`
 
+	// MemberUID is populated by status reflection, never inferred from the control-plane UID.
+	// +optional
+	MemberUID string `json:"memberUID,omitempty"`
+
 	// Spot is reserved for the SpotWatcher controller. The NodeProvision
 	// controller preserves this subtree but does not author it.
 	// +optional

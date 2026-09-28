@@ -13,6 +13,7 @@ spec:
           if observedObj == nil or observedObj.status == nil then
             return {}
           end
+          observedObj.status.memberUID = observedObj.metadata.uid
           return observedObj.status
         end
     statusAggregation:

@@ -287,6 +287,8 @@ spec:
                   ObservedCluster is set by Karmada status aggregation to record the member
                   cluster that supplied this top-level status. The Provisioner does not author it.
                 type: string
+              memberUID:
+                type: string
               phase:
                 description: Current lifecycle phase.
                 type: string

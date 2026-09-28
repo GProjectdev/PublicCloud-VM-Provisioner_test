@@ -2412,6 +2412,7 @@ func (r *NodeProvisionReconciler) updateNodeProvisionStatus(ctx context.Context,
 	} else {
 		np.Status.Spot = nil
 	}
+	np.Status.MemberUID = string(latest.UID)
 	return r.Status().Update(ctx, np)
 }
 
