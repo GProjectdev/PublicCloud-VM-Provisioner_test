@@ -143,6 +143,9 @@ spec:
                           adapterSHA256:
                             pattern: ^[A-Fa-f0-9]{64}$
                             type: string
+                          certifyRestore:
+                            description: Administrator qualification of the pinned runtime/environment; not proof of a particular Pod restore.
+                            type: boolean
                           crioCommit:
                             pattern: ^[A-Fa-f0-9]{40}$
                             type: string

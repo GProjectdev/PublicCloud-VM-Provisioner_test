@@ -127,6 +127,10 @@ type NodeSoftwareConfig struct {
 // MigrationRuntimeConfig identifies the reviewed stateful migration runtime
 // package and source revisions expected in its manifest.
 type MigrationRuntimeConfig struct {
+	// CertifyRestore is an administrator opt-in for a package/environment that
+	// passed GPU file-restore qualification. It is not per-Pod restore evidence.
+	// +optional
+	CertifyRestore bool `json:"certifyRestore,omitempty"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^https://[^[:space:]'"<>?#]+$`
 	PackageURL string `json:"packageURL"`

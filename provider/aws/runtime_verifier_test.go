@@ -51,7 +51,8 @@ func TestRuntimeVerifierHeredocValidatesManifestAndBinaries(t *testing.T) {
 		wantErr   bool
 		wantError string
 	}{
-		{name: "success matching1.35", crioVer: "crio version 1.35.2\n"},
+		{name: "success matching1.35", crioVer: "crio version 1.35.2\nGitCommit: " + strings.Repeat("b", 40) + "\n"},
+		{name: "binary provenance mismatch rejects", crioVer: "crio version 1.35.2\nGitCommit: " + strings.Repeat("f", 40) + "\n", wantErr: true, wantError: "binary GitCommit"},
 		{name: "mismatch1.3 rejects", crioVer: "crio version 1.3.9\n", wantErr: true, wantError: "Kubernetes minor 1.3, want 1.35"},
 		{name: "bad binary digest rejects", crioVer: "crio version 1.35.2\n", wantErr: true, wantError: "sha256 mismatch for /usr/local/bin/crio", mutate: func(manifest map[string]any, _ map[string][]byte) {
 			manifest["binaries"].(map[string]string)[nodesoftware.CRIOBinaryPath] = strings.Repeat("0", 64)

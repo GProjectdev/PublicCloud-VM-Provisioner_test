@@ -138,7 +138,11 @@ type GCPConfig struct {
 
 // NodeProvisionSpec defines the desired state of NodeProvision.
 // +kubebuilder:validation:XValidation:rule="self.networkMode != 'VPC' || self.provider == 'AWS'",message="VPC networking requires the AWS provider"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.fence) || self == oldSelf",message="provisioning spec is immutable after a fence request"
 type NodeProvisionSpec struct {
+	// Fence irreversibly terminates this AWS VPC instance without deleting its receipt.
+	// +optional
+	Fence *NodeProvisionFenceRequest `json:"fence,omitempty"`
 	// NetworkMode selects direct AWS VPC networking or per-node WireGuard.
 	// +kubebuilder:validation:Enum=WireGuard;VPC
 	// +kubebuilder:default=WireGuard
@@ -194,6 +198,9 @@ type NodeProvisionSpec struct {
 
 // NodeProvisionStatus defines the observed state of NodeProvision.
 type NodeProvisionStatus struct {
+	// Fence is provider-confirmed evidence, not Kubernetes Node readiness.
+	// +optional
+	Fence *NodeProvisionFenceStatus `json:"fence,omitempty"`
 	// Current lifecycle phase.
 	Phase NodeProvisionPhase `json:"phase,omitempty"`
 
@@ -247,6 +254,23 @@ type NodeProvisionStatus struct {
 	// controller preserves this subtree but does not author it.
 	// +optional
 	Spot *NodeProvisionSpotStatus `json:"spot,omitempty"`
+}
+
+type NodeProvisionFenceRequest struct {
+	// +kubebuilder:validation:MinLength=1
+	OperationUID string `json:"operationUID"`
+	// +kubebuilder:validation:MinLength=1
+	InstanceID string `json:"instanceID"`
+}
+
+type NodeProvisionFenceStatus struct {
+	OperationUID       string `json:"operationUID"`
+	InstanceID         string `json:"instanceID"`
+	ObservedGeneration int64  `json:"observedGeneration"`
+	// +kubebuilder:validation:Enum=Fencing;Fenced;Rejected
+	Phase      string      `json:"phase"`
+	Message    string      `json:"message,omitempty"`
+	ObservedAt metav1.Time `json:"observedAt"`
 }
 
 // NodeProvisionSpotStatus is the Spot interruption signal contract owned by

@@ -11,8 +11,9 @@ spec:
     nodeSoftware:
       runtimeProfile: StatefulMigration
       nfsClient: true
-      gpuMode: DRA
+      gpuMode: DevicePlugin
       migrationRuntime:
+        certifyRestore: false
         packageURL: https://__REPLACE_PUBLIC_HTTPS_HOST__/runtime.deb
         packageSHA256: __REPLACE_HEX64_PACKAGE_SHA256__
         crioCommit: __REPLACE_40_HEX_CRIO_COMMIT__

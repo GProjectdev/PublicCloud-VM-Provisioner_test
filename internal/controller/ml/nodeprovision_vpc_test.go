@@ -118,6 +118,12 @@ func TestVPCJoiningLabelsStatefulMigrationArtifactNode(t *testing.T) {
 	if got.Labels["restore-from-file"] == "true" {
 		t.Fatalf("restore-from-file must not be asserted by NodeReady/runtime package verification alone: %#v", got.Labels)
 	}
+	if got.Labels["migration.dcnlab.com/artifact-node"] != "true" {
+		t.Fatal("artifact DaemonSet selector label missing")
+	}
+	if got.Labels["migration.dcnlab.com/restore-from-file"] == "true" {
+		t.Fatal("uncertified node was granted restore capability")
+	}
 }
 func TestVPCNetConfigNamespaceIsolation(t *testing.T) {
 	scheme := runtime.NewScheme()

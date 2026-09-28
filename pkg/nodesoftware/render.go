@@ -117,6 +117,9 @@ if actual_minor != expected["kubernetesMinor"]:
     raise SystemExit(f"crio --version Kubernetes minor {actual_minor}, want {expected['kubernetesMinor']}")
 if not criu_version.strip():
     raise SystemExit("criu --version returned empty output")
+commit = re.search(r"GitCommit:\s*([0-9a-f]{40})\b", crio_version)
+if not commit or commit.group(1) != expected["crioCommit"]:
+    raise SystemExit("crio binary GitCommit does not match runtime manifest")
 PY
 mkdir -p /etc/systemd/system/crio.service.d /etc/crio/crio.conf.d /etc/criu /etc/cdi /var/run/cdi
 # An explicit --config path must exist even when the distro supplies only drop-ins.
@@ -145,6 +148,8 @@ ensure_criu_plugin_dir() {
 }
 ensure_criu_plugin_dir /etc/criu/default.conf
 ensure_criu_plugin_dir /etc/criu/runc.conf
+ensure_criu_plugin_dir /etc/criu/crun.conf
+printf '%%s\n' %s > /usr/local/share/stateful-migration/package.sha256
 systemctl daemon-reload
-`, shellQuote(cfg.PackageURL), shellQuote(cfg.PackageSHA256), shellQuote(RuntimeManifestPath), shellQuote(RuntimeManifestPath), kubeMinor, strings.ToLower(cfg.CRIOCommit), strings.ToLower(cfg.CRIUCommit), strings.ToLower(cfg.AdapterSHA256), CRIOBinaryPath, CRIUBinaryPath, CUDACheckpointPath, CUDAPluginPath, CUDAPluginPath, CRIOBinaryPath, CRIUBinaryPath)
+`, shellQuote(cfg.PackageURL), shellQuote(cfg.PackageSHA256), shellQuote(RuntimeManifestPath), shellQuote(RuntimeManifestPath), kubeMinor, strings.ToLower(cfg.CRIOCommit), strings.ToLower(cfg.CRIUCommit), strings.ToLower(cfg.AdapterSHA256), CRIOBinaryPath, CRIUBinaryPath, CUDACheckpointPath, CUDAPluginPath, CUDAPluginPath, CRIOBinaryPath, CRIUBinaryPath, shellQuote(strings.ToLower(cfg.PackageSHA256)))
 }

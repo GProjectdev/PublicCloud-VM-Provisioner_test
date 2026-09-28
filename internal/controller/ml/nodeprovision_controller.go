@@ -68,6 +68,8 @@ type NodeProvisionReconciler struct {
 	KubeletServingCA KubeletServingCAConfig
 	// KubeletServingTLSChecker verifies that kubelet has actually loaded the issued serving cert.
 	KubeletServingTLSChecker KubeletServingTLSChecker
+	// FenceInstance is an optional provider adapter used by focused tests.
+	FenceInstance func(context.Context, *mlv1alpha1.NodeProvision) error
 	// onPremJobs holds in-flight on-prem provisioning goroutines.
 	// Key: "<namespace>/<name>", Value: <-chan onPremJobResult
 	onPremJobs sync.Map
@@ -215,6 +217,10 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 		return ctrl.Result{}, nil
+	}
+
+	if np.Spec.Fence != nil || np.Status.Fence != nil {
+		return r.reconcileFence(ctx, np)
 	}
 
 	// For AWS nodes, keep a controller-owned copy of the credentials secret up-to-date.
@@ -1191,6 +1197,7 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		found.Labels["infra.dcn.ssu.ac.kr/worker"] = "true"
 		if statefulMigrationNode {
 			found.Labels["artifact-node"] = "true"
+			found.Labels["migration.dcnlab.com/artifact-node"] = "true"
 		}
 		hwType := "cpu"
 		if strings.EqualFold(np.Spec.HardwareType, "gpu") || strings.Contains(np.Spec.NodeLabel, "gpu") {
@@ -1266,6 +1273,13 @@ func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1
 		np.Status.NodeName = found.Name
 		if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
 			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: requeueJoining}, nil
+	}
+	if err := r.certifyRestoreRuntime(ctx, np, found); err != nil {
+		r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseVerifyingHealth, "Restore runtime verification failed: "+err.Error(), 85)
+		if updateErr := r.updateNodeProvisionStatus(ctx, np); updateErr != nil {
+			return ctrl.Result{}, updateErr
 		}
 		return ctrl.Result{RequeueAfter: requeueJoining}, nil
 	}

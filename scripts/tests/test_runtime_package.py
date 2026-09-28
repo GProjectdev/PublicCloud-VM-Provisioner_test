@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "build-stateful-runtime-package.py"
@@ -115,6 +116,32 @@ class RuntimePackageBuilderTest(unittest.TestCase):
         args = self.args()
         args.remove("--confirm-reviewed-adapter")
         self.assertEqual(builder.main(args), 2)
+
+    def test_restore_profile_requires_clean_source_and_matching_binary(self) -> None:
+        args = builder.parse_args(self.args() + ["--crio-source", str(self.root)])
+        binary = self.root / "bin" / "crio"
+        clean_version = "GitCommit: " + args.crio_commit + "\nGitTreeState: clean\n"
+        cases = [
+            (["", args.crio_commit, "", clean_version], False),
+            ([" M server/container_restore.go"], True),
+            (["", "f" * 40], True),
+            (["", args.crio_commit, "", "GitCommit: " + "f" * 40], True),
+            (["", args.crio_commit, "", clean_version.replace("clean", "dirty")], True),
+        ]
+        for output, rejected in cases:
+            with self.subTest(output=output), mock.patch.object(builder.subprocess, "check_output", side_effect=output):
+                if rejected:
+                    with self.assertRaises(builder.BuildError):
+                        builder.verify_restore_source(args, binary)
+                else:
+                    builder.verify_restore_source(args, binary)
+        self.assertEqual(builder.build_manifest(args, {})["restoreProfile"], "gpu-file-v1")
+
+    def test_restore_profile_rejects_wrong_binary_path(self) -> None:
+        args = builder.parse_args(self.args() + ["--crio-source", str(self.root)])
+        with mock.patch.object(builder.subprocess, "check_output", side_effect=["", args.crio_commit, ""]):
+            with self.assertRaises(builder.BuildError):
+                builder.verify_restore_source(args, self.crio)
 
     def test_rejects_symlink_input(self) -> None:
         if sys.platform.startswith("win"):

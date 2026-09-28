@@ -103,6 +103,20 @@ spec:
                   namespace:
                     type: string
                 type: object
+              fence:
+                description: Fence irreversibly terminates this AWS VPC instance without
+                  deleting its receipt.
+                properties:
+                  instanceID:
+                    minLength: 1
+                    type: string
+                  operationUID:
+                    minLength: 1
+                    type: string
+                required:
+                - instanceID
+                - operationUID
+                type: object
               gcpConfig:
                 description: GCPConfig holds provider-specific parameters for GCP
                   Compute Engine provisioning.
@@ -209,6 +223,8 @@ spec:
             x-kubernetes-validations:
             - message: VPC networking requires the AWS provider
               rule: self.networkMode != 'VPC' || self.provider == 'AWS'
+            - message: provisioning spec is immutable after a fence request
+              rule: '!has(oldSelf.fence) || self == oldSelf'
           status:
             description: status defines the observed state of NodeProvision
             properties:
@@ -216,6 +232,35 @@ spec:
                 description: Timestamp when provisioning completed.
                 format: date-time
                 type: string
+              fence:
+                description: Fence is provider-confirmed evidence, not Kubernetes
+                  Node readiness.
+                properties:
+                  instanceID:
+                    type: string
+                  message:
+                    type: string
+                  observedAt:
+                    format: date-time
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  operationUID:
+                    type: string
+                  phase:
+                    enum:
+                    - Fencing
+                    - Fenced
+                    - Rejected
+                    type: string
+                required:
+                - instanceID
+                - observedAt
+                - observedGeneration
+                - operationUID
+                - phase
+                type: object
               hostname:
                 description: Assigned hostname.
                 type: string

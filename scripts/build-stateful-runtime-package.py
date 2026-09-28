@@ -31,6 +31,8 @@ HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 DEB_VERSION_RE = re.compile(r"^[0-9][A-Za-z0-9.+~:-]*$")
 K8S_MINOR_RE = re.compile(r"^[0-9]+\.[0-9]+$")
+RESTORE_BASELINE = "6d082c56b0212769f58a6acd80ce2879c3d998f0"
+RESTORE_PROFILE = "gpu-file-v1"
 DEPENDS_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9+.-]*(?::[A-Za-z0-9][A-Za-z0-9+.-]*)?"
     r"(?:\s*\((?:>=|<=|=|<<|>>)\s*[A-Za-z0-9][A-Za-z0-9.+:~\-]*\))?$"
@@ -133,7 +135,28 @@ def build_manifest(args: argparse.Namespace, binary_hashes: Mapping[str, str]) -
         "criuCommit": args.criu_commit,
         "adapterSHA256": args.adapter_sha256,
         "binaries": dict(sorted(binary_hashes.items())),
+        "restoreProfile": RESTORE_PROFILE if args.crio_source else "",
     }
+
+
+def verify_restore_source(args: argparse.Namespace, binary: Path) -> None:
+    if not args.crio_source:
+        return
+    source = Path(args.crio_source).resolve()
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(["git", "-C", str(source), *arguments], text=True).strip()
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        raise BuildError("restore profile requires a clean CRI-O source tree")
+    if git("rev-parse", "HEAD") != args.crio_commit:
+        raise BuildError("CRI-O source HEAD does not match --crio-commit")
+    git("merge-base", "--is-ancestor", RESTORE_BASELINE, "HEAD")
+    if binary.resolve() != source / "bin" / "crio":
+        raise BuildError("restore profile requires --crio from the source tree bin/crio")
+    version = subprocess.check_output([str(binary.resolve()), "--version"], text=True)
+    if not re.search(r"GitCommit:\s*" + re.escape(args.crio_commit) + r"\b", version):
+        raise BuildError("CRI-O binary GitCommit does not match reviewed source")
+    if not re.search(r"GitTreeState:\s*clean\b", version):
+        raise BuildError("CRI-O binary was built from a dirty source tree")
 
 
 def stage_package(args: argparse.Namespace, staging: Path) -> dict[str, object]:
@@ -144,6 +167,7 @@ def stage_package(args: argparse.Namespace, staging: Path) -> dict[str, object]:
         "cudaPlugin": require_regular_input(Path(args.cuda_plugin), "--cuda-plugin"),
     }
     validate_elf_arch(input_paths, args.arch)
+    verify_restore_source(args, input_paths["crio"])
 
     binary_hashes = {}
     for name, src in input_paths.items():
@@ -206,6 +230,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Build the files-only stateful-migration-runtime .deb from reviewed local artifacts.",
     )
     parser.add_argument("--crio", required=True, help="Reviewed CRI-O ELF binary")
+    parser.add_argument("--crio-source", help="Clean custom-crio tree containing bin/crio; validates the GPU file-restore baseline (not an E2E certification)")
     parser.add_argument("--criu", required=True, help="Reviewed CRIU ELF binary")
     parser.add_argument("--cuda-checkpoint", required=True, help="Reviewed cuda-checkpoint ELF helper")
     parser.add_argument("--cuda-plugin", required=True, help="Reviewed CRIU CUDA plugin ELF shared object")

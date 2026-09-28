@@ -143,6 +143,11 @@ spec:
                           adapterSHA256:
                             pattern: ^[A-Fa-f0-9]{64}$
                             type: string
+                          certifyRestore:
+                            description: |-
+                              CertifyRestore is an administrator opt-in for a package/environment that
+                              passed GPU file-restore qualification. It is not per-Pod restore evidence.
+                            type: boolean
                           crioCommit:
                             pattern: ^[A-Fa-f0-9]{40}$
                             type: string
