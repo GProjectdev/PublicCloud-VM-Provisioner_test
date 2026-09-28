@@ -129,7 +129,9 @@ if [ ! -e /etc/crio/crio.conf ]; then
 fi
 cat >/etc/systemd/system/crio.service.d/20-stateful-migration.conf <<'EOF'
 [Service]
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="NVIDIA_DRIVER_ROOT=/run/nvidia/driver"
+Environment="PATH=/run/nvidia/driver/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="LD_LIBRARY_PATH=/run/nvidia/driver/usr/lib/x86_64-linux-gnu:/run/nvidia/driver/usr/lib64:/run/nvidia/driver/lib64"
 ExecStart=
 ExecStart=/usr/local/bin/crio --config=/etc/crio/crio.conf --config-dir=/etc/crio/crio.conf.d
 EOF
