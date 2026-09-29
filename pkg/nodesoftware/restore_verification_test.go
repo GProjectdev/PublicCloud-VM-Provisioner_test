@@ -18,7 +18,7 @@ func TestRestoreProbeRejectsRuntimeDrift(t *testing.T) {
 	if err != nil {
 		t.Skip("python unavailable")
 	}
-	for _, scenario := range []string{"ok", "running-binary", "config-args", "crun-path", "package-pin"} {
+	for _, scenario := range []string{"ok", "running-binary", "config-args", "crun-path", "package-pin", "driver-linker", "cuda-helper"} {
 		t.Run(scenario, func(t *testing.T) {
 			harness := `import io, json, hashlib, os, re, stat, subprocess, sys
 from unittest.mock import patch
@@ -40,6 +40,11 @@ def opened(path, mode="r"):
     if path.startswith("/etc/criu/"): return io.StringIO("libdir /usr/local/lib/criu\n")
     return io.BytesIO(b"wrong" if scenario == "running-binary" and path.startswith("/proc/") else b"binary")
 def output(args, **kwargs):
+    if args[0] == "python3" or args[0] == paths[2]:
+        assert "LD_LIBRARY_PATH" not in kwargs["env"]
+        if (scenario == "driver-linker" and args[0] == "python3") or (scenario == "cuda-helper" and args[0] == paths[2]):
+            raise subprocess.CalledProcessError(1, args)
+        return ""
     if args[0] == "systemctl": return "123"
     if args[-1] == "config":
         crun = "/wrong" if scenario == "crun-path" else "/usr/libexec/crio/crun"
@@ -61,6 +66,18 @@ with patch("builtins.open", side_effect=opened), patch("os.lstat", return_value=
 				t.Fatalf("drift accepted: %s", out)
 			}
 		})
+	}
+}
+
+func TestRestoreLinkerIsBoundedAndDoesNotRestartRuntime(t *testing.T) {
+	cmd := RestoreLinkerCommand()
+	for _, required := range []string{"timeout 45s", "ldconfig", "env -i", "ctypes.CDLL", "libcuda.so.1", "libnvidia-ml.so.1", "stateful-nvidia-driver.conf", "mktemp", "pipefail"} {
+		if !strings.Contains(cmd, required) {
+			t.Fatalf("missing %s", required)
+		}
+	}
+	if strings.Contains(cmd, "systemctl restart") || strings.Contains(cmd, "apt-get") {
+		t.Fatal("linker preparation must not replace live runtime")
 	}
 }
 

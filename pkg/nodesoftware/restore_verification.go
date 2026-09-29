@@ -71,6 +71,10 @@ require(section is not None, "missing crun configuration")
 require(re.search(r'(?m)^\s*runtime_path\s*=\s*"' + re.escape(crun) + r'"\s*$', section.group(1)), "unqualified crun path")
 require("+CRIU" in subprocess.check_output([crun, "--version"], text=True), "crun lacks CRIU")
 require("--tcp-close" in subprocess.check_output([crun, "restore", "--help"], text=True), "crun lacks tcp-close")
+clean_env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+subprocess.check_output(["python3", "-c", 'import ctypes; ctypes.CDLL("libcuda.so.1"); ctypes.CDLL("libnvidia-ml.so.1")'],
+                        env=clean_env, timeout=10, stderr=subprocess.STDOUT)
+subprocess.check_output([paths[2], "--help"], env=clean_env, timeout=10, stderr=subprocess.STDOUT)
 for path in ["/etc/criu/default.conf", "/etc/criu/crun.conf", "/etc/criu/runc.conf"]:
     with open(path) as f:
         require("libdir /usr/local/lib/criu" in f.read().splitlines(), "missing CUDA plugin libdir: " + path)

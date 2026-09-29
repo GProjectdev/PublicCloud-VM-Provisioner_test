@@ -35,6 +35,9 @@ func (r *NodeProvisionReconciler) certifyRestoreRuntime(ctx context.Context, np 
 		return err
 	}
 	defer remote.Conn.Close()
+	if output, err := ssh.Run(remote, nodesoftware.RestoreLinkerCommand()); err != nil {
+		return fmt.Errorf("restore driver linker preparation failed: %w: %.1500s", err, output)
+	}
 	output, err := ssh.Run(remote, command)
 	if err != nil {
 		return fmt.Errorf("runtime probe failed: %w: %.1500s", err, output)
