@@ -414,26 +414,21 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 	}
 
 	// ── Resolve defaults (instanceType, AMI, network) ────────────────────────
-	// resolveAWSDefaults patches the spec when fields are missing.  After a
-	// patch the object's ResourceVersion changes; returning here lets the
-	// watch event trigger a fresh reconcile with the up-to-date object so that
-	// all subsequent status updates use the correct ResourceVersion.
-	patched, err := r.resolveAWSDefaults(ctx, np, secret)
+	// Resolve defaults locally before any status update can re-fetch the object.
+	_, err := r.resolveAWSDefaults(ctx, np, secret)
 	if err != nil {
 		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving AWS defaults: %v", err))
-	}
-	if patched {
-		// A fresh reconcile will be queued by the spec-change watch event.
-		// Return without error so the work queue uses its normal interval
-		// instead of exponential backoff.
-		return ctrl.Result{}, nil
 	}
 
 	// ── Validate ────────────────────────────────────────────────────────────
 	if err := awsprovision.ValidateAWSConfig(np.Spec); err != nil {
 		return r.failNodeProvision(ctx, np, fmt.Sprintf("AWS validation failed: %v", err))
 	}
-	log.Info("AWS validation successful")
+	launchNode, err := awsLaunchSnapshot(np)
+	if err != nil {
+		return r.failNodeProvision(ctx, np, err.Error())
+	}
+	log.Info("AWS validation successful", "keyPairName", launchNode.Spec.AWSConfig.KeyPairName)
 
 	// ── Set Validating status (non-critical; ignore conflict on the first run) ─
 	r.setPhaseStatus(np, mlv1alpha1.NodeProvisionPhaseValidating, "Validating AWS configuration", 5)
@@ -481,7 +476,7 @@ func (r *NodeProvisionReconciler) reconcileAWSProvisioning(
 		return r.failNodeProvision(ctx, np, fmt.Sprintf("resolving AWS credentials: %v", err))
 	}
 
-	result, err := awsprovision.ProvisionEC2Node(ctx, np, creds, vpnServerClient, netConfig)
+	result, err := awsprovision.ProvisionEC2Node(ctx, launchNode, creds, vpnServerClient, netConfig)
 	// Always persist VPN allocation immediately — even on EC2 failure — so that
 	// cleanupVPNPeer can find and release the peer on the next retry instead of
 	// leaving it as an orphan and allocating yet another IP.
@@ -632,8 +627,8 @@ func (r *NodeProvisionReconciler) reconcileGCPProvisioning(
 //   - awsConfig.vpcId / subnetId / securityGroupIds: resolved from the region's
 //     default VPC, creating one if none exists
 //
-// All resolved values are written back via a Patch so they are persisted in the
-// CRD and visible to operators.  Fields already set by the user are never overwritten.
+// Resolved values remain local to the launch request to avoid spec ownership
+// conflicts. Fields already set by the user are never overwritten.
 // resolveAWSKeyPair ensures an EC2 key pair exists for this node and that the
 // private key is stored in a Kubernetes Secret named "<npName>-ssh-key".
 //
@@ -709,8 +704,7 @@ func (r *NodeProvisionReconciler) resolveAWSKeyPair(
 	return result.KeyPairName, nil
 }
 
-// resolveAWSDefaults returns (true, nil) when it patched the spec so the caller
-// can return immediately and let the watch event trigger a fresh reconcile.
+// resolveAWSDefaults resolves launch settings without modifying the API spec.
 func (r *NodeProvisionReconciler) resolveAWSDefaults(
 	ctx context.Context,
 	np *mlv1alpha1.NodeProvision,
@@ -736,7 +730,6 @@ func (r *NodeProvisionReconciler) resolveAWSDefaults(
 	if err != nil {
 		return false, fmt.Errorf("resolving AWS credentials: %w", err)
 	}
-	base := np.DeepCopy()
 	if np.Spec.AWSConfig == nil {
 		np.Spec.AWSConfig = &mlv1alpha1.AWSConfig{}
 	}
@@ -801,11 +794,9 @@ func (r *NodeProvisionReconciler) resolveAWSDefaults(
 		log.Info("Resolved EC2 key pair", "keyPairName", kpName)
 	}
 
-	if err := r.Patch(ctx, np, client.MergeFrom(base)); err != nil {
-		return false, fmt.Errorf("patching NodeProvision spec with resolved defaults: %w", err)
-	}
-	log.Info("Patched NodeProvision spec with resolved AWS defaults")
-	return true, nil
+	// Member-local defaults must not depend on persistence in a Karmada-owned spec.
+	log.Info("Resolved AWS defaults for current launch")
+	return false, nil
 }
 
 // resolveGCPDefaults auto-populates GCP fields that can be safely inferred.
@@ -2456,10 +2447,33 @@ func resolveSecretKey(secret *corev1.Secret, key string) ([]byte, error) {
 
 // dialSSH auto-detects the auth method from the credential value.
 func dialSSH(host string, port int, user, credential string) (*ssh.Client, error) {
+	var err error
+	port, err = effectiveSSHPort(port)
+	if err != nil {
+		return nil, err
+	}
 	if strings.HasPrefix(strings.TrimSpace(credential), "-----BEGIN") {
 		return ssh.ConnectWithPrivateKey(host, port, user, credential)
 	}
 	return ssh.Connect(host, port, user, credential)
+}
+
+func effectiveSSHPort(port int) (int, error) {
+	if port == 0 {
+		return 22, nil
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("invalid SSH port %d", port)
+	}
+	return port, nil
+}
+
+// Keep launch credentials independent of status-conflict re-fetches.
+func awsLaunchSnapshot(np *mlv1alpha1.NodeProvision) (*mlv1alpha1.NodeProvision, error) {
+	if np.Spec.AWSConfig == nil || strings.TrimSpace(np.Spec.AWSConfig.KeyPairName) == "" {
+		return nil, fmt.Errorf("EC2 launch requires a resolved SSH key pair")
+	}
+	return np.DeepCopy(), nil
 }
 
 func ensureFinalizer(np *mlv1alpha1.NodeProvision, finalizer string) bool {
