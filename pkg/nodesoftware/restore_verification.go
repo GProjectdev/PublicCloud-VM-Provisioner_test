@@ -63,12 +63,18 @@ version = subprocess.check_output([paths[0], "--version"], text=True)
 require(re.search(r"GitCommit:\s*" + re.escape(expected["crioCommit"]) + r"\b", version), "CRI-O commit mismatch")
 config = subprocess.check_output([paths[0], "--config=/etc/crio/crio.conf",
     "--config-dir=/etc/crio/crio.conf.d", "config"], text=True)
-require(re.search(r"(?m)^\s*enable_criu_support\s*=\s*true\s*$", config), "CRIU disabled")
-require(re.search(r'(?m)^\s*default_runtime\s*=\s*"crun"\s*$', config), "unqualified default runtime")
+def config_value(section_name, key):
+    # CRI-O comments scalar values; accept only unique, exact assignments
+    # inside the real (uncommented) section, never documentation examples.
+    sections = re.findall(r'(?ms)^\[' + re.escape(section_name) + r'\][ \t]*\n(.*?)(?=^\[|\Z)', config)
+    require(len(sections) == 1, "missing or ambiguous config section: " + section_name)
+    values = re.findall(r'(?m)^[ \t]*(?:#[ \t]*)?' + re.escape(key) + r'[ \t]*=[ \t]*([^\r\n]*?)[ \t]*$', sections[0])
+    require(len(values) == 1, "missing or ambiguous config value: " + key)
+    return values[0]
+require(config_value("crio.runtime", "enable_criu_support") == "true", "CRIU disabled")
+require(config_value("crio.runtime", "default_runtime") == '"crun"', "unqualified default runtime")
 crun = "/usr/libexec/crio/crun"
-section = re.search(r'(?ms)^\[crio\.runtime\.runtimes\.crun\]\s*\n(.*?)(?=^\[|\Z)', config)
-require(section is not None, "missing crun configuration")
-require(re.search(r'(?m)^\s*runtime_path\s*=\s*"' + re.escape(crun) + r'"\s*$', section.group(1)), "unqualified crun path")
+require(config_value("crio.runtime.runtimes.crun", "runtime_path") == '"' + crun + '"', "unqualified crun path")
 require("+CRIU" in subprocess.check_output([crun, "--version"], text=True), "crun lacks CRIU")
 require("--tcp-close" in subprocess.check_output([crun, "restore", "--help"], text=True), "crun lacks tcp-close")
 clean_env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}

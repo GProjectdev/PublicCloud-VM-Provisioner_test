@@ -18,7 +18,7 @@ func TestRestoreProbeRejectsRuntimeDrift(t *testing.T) {
 	if err != nil {
 		t.Skip("python unavailable")
 	}
-	for _, scenario := range []string{"ok", "running-binary", "config-args", "crun-path", "package-pin", "driver-linker", "cuda-helper"} {
+	for _, scenario := range []string{"ok", "commented", "disabled", "wrong-default", "missing-value", "duplicate-value", "example-only", "wrong-section", "running-binary", "config-args", "crun-path", "package-pin", "driver-linker", "cuda-helper"} {
 		t.Run(scenario, func(t *testing.T) {
 			harness := `import io, json, hashlib, os, re, stat, subprocess, sys
 from unittest.mock import patch
@@ -48,7 +48,16 @@ def output(args, **kwargs):
     if args[0] == "systemctl": return "123"
     if args[-1] == "config":
         crun = "/wrong" if scenario == "crun-path" else "/usr/libexec/crio/crun"
-        return 'enable_criu_support = true\ndefault_runtime = "crun"\n[crio.runtime.runtimes.crun]\nruntime_path = "' + crun + '"\n[crio.runtime.runtimes.other]\nruntime_path = "/usr/libexec/crio/crun"\n'
+        prefix = '# ' if scenario != 'ok' else ''
+        enabled = 'false' if scenario == 'disabled' else 'true'
+        runtime = 'runc' if scenario == 'wrong-default' else 'crun'
+        value = prefix + 'enable_criu_support = ' + enabled + '\n'
+        if scenario == 'missing-value': value = ''
+        if scenario == 'duplicate-value': value += 'enable_criu_support = false\n'
+        header = '[crio.runtime]\n'
+        if scenario == 'example-only': header = '# [crio.runtime]\n'
+        if scenario == 'wrong-section': header = '[crio.image]\n'
+        return header + value + prefix + 'default_runtime = "' + runtime + '"\n[crio.runtime.runtimes.crun]\n' + prefix + 'runtime_path = "' + crun + '"\n[crio.runtime.runtimes.other]\nruntime_path = "/usr/libexec/crio/crun"\n'
     if args[0] == paths[0]: return "GitCommit: " + manifest["crioCommit"]
     return "+CRIU" if args[-1] == "--version" else "--tcp-close"
 class Info: st_mode = stat.S_IFREG
@@ -58,7 +67,7 @@ with patch("builtins.open", side_effect=opened), patch("os.lstat", return_value=
 			cmd := exec.Command(python, "-c", harness, scenario, strings.ToLower(cfg.MigrationRuntime.PackageSHA256))
 			cmd.Stdin = strings.NewReader(body)
 			out, err := cmd.CombinedOutput()
-			if scenario == "ok" {
+			if scenario == "ok" || scenario == "commented" {
 				if err != nil || !strings.Contains(string(out), "RESTORE_RUNTIME_VERIFIED") {
 					t.Fatalf("%v: %s", err, out)
 				}
