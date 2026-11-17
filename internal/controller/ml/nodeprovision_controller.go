@@ -69,7 +69,8 @@ type NodeProvisionReconciler struct {
 	// KubeletServingTLSChecker verifies that kubelet has actually loaded the issued serving cert.
 	KubeletServingTLSChecker KubeletServingTLSChecker
 	// FenceInstance is an optional provider adapter used by focused tests.
-	FenceInstance func(context.Context, *mlv1alpha1.NodeProvision) error
+	FenceInstance               func(context.Context, *mlv1alpha1.NodeProvision) error
+	BootstrapInstanceTerminated func(context.Context, *mlv1alpha1.NodeProvision) (bool, error)
 	// onPremJobs holds in-flight on-prem provisioning goroutines.
 	// Key: "<namespace>/<name>", Value: <-chan onPremJobResult
 	onPremJobs sync.Map
@@ -191,6 +192,7 @@ echo "node reset complete"
 // ConfigMaps, so list/watch are required even though reconciliation reads only
 // kube-public/cluster-info.
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 
 func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -286,6 +288,9 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
 
 	case mlv1alpha1.NodeProvisionPhaseWaitingForInstance:
+		if handled, result, err := r.reconcileInterruptedBootstrap(ctx, np); handled {
+			return result, err
+		}
 		secret, err := r.getSecret(ctx, np)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("getting credentials secret: %w", err)
@@ -318,8 +323,14 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.reconcileNPImagePrepull(ctx, np)
 
 	case mlv1alpha1.NodeProvisionPhaseReady:
-		log.V(1).Info("NodeProvision is ready, no action needed")
-		return ctrl.Result{}, nil
+		pending, err := r.restoreCertificationPending(ctx, np)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if pending {
+			return r.reconcileJoining(ctx, np)
+		}
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 
 	case mlv1alpha1.NodeProvisionPhaseFailed:
 		if err := r.cleanupVPNPeer(ctx, np); err != nil {
@@ -1095,6 +1106,9 @@ func (r *NodeProvisionReconciler) pollOnPremBootstrap(
 
 func (r *NodeProvisionReconciler) reconcileJoining(ctx context.Context, np *mlv1alpha1.NodeProvision) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if handled, result, err := r.reconcileInterruptedBootstrap(ctx, np); handled {
+		return result, err
+	}
 
 	nodeList := &corev1.NodeList{}
 	if err := r.List(ctx, nodeList); err != nil {
@@ -2029,6 +2043,7 @@ func (r *NodeProvisionReconciler) requireNetConfig(ctx context.Context, np *mlv1
 //
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch,namespace=kube-system
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 func (r *NodeProvisionReconciler) refreshLocalJoinToken(ctx context.Context, nc *mlv1alpha1.NodeProvisionNetConfig) error {
 	// ── 1. Generate token ID (6 chars) and secret (16 chars) ─────────────────
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"

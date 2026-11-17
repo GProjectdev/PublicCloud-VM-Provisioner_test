@@ -33,10 +33,11 @@ func TestRuntimeConfigFilesPreserveBaseAndMigratePluginOption(t *testing.T) {
 	setup := script[start : start+end]
 	setup = strings.ReplaceAll(setup, "/etc/", "${root}/etc/")
 	setup = strings.ReplaceAll(setup, "/var/run/cdi", "${root}/var/run/cdi")
+	setup = strings.ReplaceAll(setup, "/usr/local/share/stateful-migration", "${root}/usr/local/share/stateful-migration")
 	check := `set -eu
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
-mkdir -p "$root/etc/criu"
+mkdir -p "$root/etc/criu" "$root/usr/local/share/stateful-migration"
 printf 'tcp-close\nplugin-dir /old\nlibdir /other\n' > "$root/etc/criu/default.conf"
 `
 	check += setup

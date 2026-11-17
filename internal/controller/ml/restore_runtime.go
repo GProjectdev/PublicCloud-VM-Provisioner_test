@@ -56,3 +56,28 @@ func (r *NodeProvisionReconciler) certifyRestoreRuntime(ctx context.Context, np 
 	node.Annotations["migration.dcnlab.com/restore-package-sha256"] = strings.ToLower(software.MigrationRuntime.PackageSHA256)
 	return r.Patch(ctx, node, patch)
 }
+
+// Existing Ready workers must honor an explicit later administrator opt-in.
+// Qualification still runs through all joining/TLS/GPU/runtime checks.
+func (r *NodeProvisionReconciler) restoreCertificationPending(ctx context.Context, np *api.NodeProvision) (bool, error) {
+	stateful, err := r.statefulMigrationRequested(ctx, np)
+	if err != nil || !stateful {
+		return false, err
+	}
+	configs := &api.NodeProvisionNetConfigList{}
+	if err := r.List(ctx, configs, client.InNamespace(np.Namespace)); err != nil {
+		return false, err
+	}
+	if len(configs.Items) != 1 {
+		return false, fmt.Errorf("restore certification requires exactly one namespace NetConfig")
+	}
+	cfg := configs.Items[0].Spec.SoftwareConfig.NodeSoftware
+	if cfg.MigrationRuntime == nil || !cfg.MigrationRuntime.CertifyRestore {
+		return false, nil
+	}
+	node := &corev1.Node{}
+	if err := r.Get(ctx, client.ObjectKey{Name: np.Status.NodeName}, node); err != nil {
+		return false, err
+	}
+	return node.Labels["migration.dcnlab.com/restore-from-file"] != "true" || node.Annotations["migration.dcnlab.com/restore-package-sha256"] != strings.ToLower(cfg.MigrationRuntime.PackageSHA256), nil
+}

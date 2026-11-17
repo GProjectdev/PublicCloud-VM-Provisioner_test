@@ -278,7 +278,9 @@ command -v systemctl >/dev/null 2>&1 || { echo 'systemd is required'; exit 1; }
 apt_update() {
   DEBIAN_FRONTEND=noninteractive apt-get \
     -o DPkg::Lock::Timeout=300 \
-    -o Acquire::Retries=5 update
+    -o Acquire::http::Timeout=30 \
+    -o Acquire::https::Timeout=30 \
+    -o Acquire::Retries=3 update
 }
 
 apt_install() {
@@ -286,7 +288,9 @@ apt_install() {
   DEBIAN_FRONTEND=noninteractive apt-get \
     -y \
     -o DPkg::Lock::Timeout=300 \
-    -o Acquire::Retries=5 \
+    -o Acquire::http::Timeout=30 \
+    -o Acquire::https::Timeout=30 \
+    -o Acquire::Retries=3 \
     -o Dpkg::Options::=--force-confnew \
     install "$@"
 }
@@ -445,10 +449,14 @@ rm -f /etc/apt/keyrings/cri-o-apt-keyring.gpg
 curl -fsSL "https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v${K8S_MINOR}/deb/Release.key" \
   | gpg --batch --yes --dearmor -o /etc/apt/keyrings/cri-o-apt-keyring.gpg
 printf '%s\n' \
-  "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://download.opensuse.org/repositories/isv:/cri-o:/stable:/v${K8S_MINOR}/deb/ /" \
+  "deb [signed-by=/etc/apt/keyrings/cri-o-apt-keyring.gpg] https://downloadcontent.opensuse.org/repositories/isv:/cri-o:/stable:/v${K8S_MINOR}/deb/ /" \
   > /etc/apt/sources.list.d/cri-o.list
-apt_update
-apt_install cri-o criu
+if ! { apt_update && apt_install cri-o criu; }; then
+  report "CRI-O package mirror failed; retrying official mirror service"
+  sed -i 's@https://downloadcontent.opensuse.org/@https://download.opensuse.org/@g' /etc/apt/sources.list.d/cri-o.list
+  apt_update
+  apt_install cri-o criu
+fi
 
 # -----------------------------------------------------------------------------
 # CRI-O configuration drop-ins

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -853,6 +854,11 @@ func buildRunInstancesInput(np *mlv1alpha1.NodeProvision, userDataB64 string) *e
 		},
 	}
 
+	if np.UID != "" {
+		token := sha256.Sum256([]byte(string(np.UID) + "/" + np.Annotations[BootstrapHistoryAnnotation]))
+		input.ClientToken = awssdk.String(fmt.Sprintf("%x", token))
+	}
+
 	if len(np.Spec.AWSConfig.SecurityGroupIDs) > 0 {
 		input.NetworkInterfaces[0].Groups = np.Spec.AWSConfig.SecurityGroupIDs
 	}
@@ -902,6 +908,9 @@ func tagInstance(ctx context.Context, client *ec2.Client, instanceID string, np 
 	for k, v := range np.Spec.AWSConfig.Tags {
 		tags = append(tags, types.Tag{Key: awssdk.String(k), Value: awssdk.String(v)})
 	}
+
+	// Reserved identity cannot be overridden by caller tags.
+	tags = append(tags, types.Tag{Key: awssdk.String("node-provision-uid"), Value: awssdk.String(string(np.UID))})
 
 	// Retry tagging with backoff because the instance may not yet be visible.
 	var lastErr error
