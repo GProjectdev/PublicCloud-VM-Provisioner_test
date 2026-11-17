@@ -1433,7 +1433,7 @@ func (r *NodeProvisionReconciler) createImagePrepullJob(
 
 	trueVal := true
 	privileged := true
-	hostPathFile := corev1.HostPathFile
+	hostPathDirectory := corev1.HostPathDirectory
 	hostPathSocket := corev1.HostPathSocket
 	ttl := int32(600)   // auto-delete 10 min after completion
 	backoff := int32(5) // retry pod up to 5 times
@@ -1491,7 +1491,7 @@ func (r *NodeProvisionReconciler) createImagePrepullJob(
 						Env:             env,
 						SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: "crictl", MountPath: "/usr/local/bin/crictl"},
+							{Name: "crictl", MountPath: "/host/usr", ReadOnly: true},
 							{Name: "cri-socket", MountPath: "/var/run/crio/crio.sock"},
 						},
 					}},
@@ -1499,8 +1499,8 @@ func (r *NodeProvisionReconciler) createImagePrepullJob(
 						{
 							Name: "crictl",
 							VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-								Path: "/usr/local/bin/crictl",
-								Type: &hostPathFile,
+								Path: "/usr",
+								Type: &hostPathDirectory,
 							}},
 						},
 						{
@@ -1522,7 +1522,11 @@ func (r *NodeProvisionReconciler) createImagePrepullJob(
 func buildPrepullScript(images []mlv1alpha1.ImagePrepull) string {
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")
-	b.WriteString("CRICTL=/usr/local/bin/crictl\n")
+	b.WriteString("CRICTL=\n")
+	b.WriteString("for candidate in /host/usr/local/bin/crictl /host/usr/bin/crictl; do\n")
+	b.WriteString("  if [ -x \"$candidate\" ]; then CRICTL=\"$candidate\"; break; fi\n")
+	b.WriteString("done\n")
+	b.WriteString("[ -n \"$CRICTL\" ] || { echo 'host crictl not found' >&2; exit 1; }\n")
 	b.WriteString("ENDPOINT=unix:///var/run/crio/crio.sock\n")
 	b.WriteString("if [ -n \"${REGISTRY_USER:-}\" ] && [ -n \"${REGISTRY_PASS:-}\" ]; then\n")
 	b.WriteString("  CREDS=\"--creds ${REGISTRY_USER}:${REGISTRY_PASS}\"\n")
