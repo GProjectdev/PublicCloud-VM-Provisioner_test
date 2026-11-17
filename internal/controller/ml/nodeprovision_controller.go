@@ -1371,7 +1371,7 @@ func (r *NodeProvisionReconciler) reconcileImagePrepullJob(
 	images []mlv1alpha1.ImagePrepull,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	jobName := np.Name + "-prepull"
+	jobName := nodeProvisionPrepullJobName(np)
 
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: np.Namespace}, job)
@@ -1387,6 +1387,11 @@ func (r *NodeProvisionReconciler) reconcileImagePrepullJob(
 		return ctrl.Result{RequeueAfter: npPrepullPollInterval}, nil
 	}
 
+	// Never consume or delete a completed Job belonging to a recreated VM.
+	owner := metav1.GetControllerOf(job)
+	if owner == nil || owner.UID != np.UID || owner.Kind != "NodeProvision" || owner.Name != np.Name || owner.APIVersion != mlv1alpha1.GroupVersion.String() {
+		return ctrl.Result{}, fmt.Errorf("pre-pull Job ownership does not match NodeProvision UID")
+	}
 	// Job exists — inspect conditions.
 	for _, cond := range job.Status.Conditions {
 		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
@@ -1457,7 +1462,7 @@ func (r *NodeProvisionReconciler) createImagePrepullJob(
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      np.Name + "-prepull",
+			Name:      nodeProvisionPrepullJobName(np),
 			Namespace: np.Namespace,
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion:         mlv1alpha1.GroupVersion.String(),
@@ -2518,4 +2523,15 @@ func parsePort(s string, defaultPort int) int {
 		return defaultPort
 	}
 	return n
+}
+
+// Job names are copied into labels and therefore must fit 63 bytes even though
+// metadata names permit longer strings. Preserve existing short-name jobs.
+func nodeProvisionPrepullJobName(np *mlv1alpha1.NodeProvision) string {
+	name := np.Name + "-prepull"
+	if len(name) <= 63 {
+		return name
+	}
+	digest := sha256.Sum256([]byte(string(np.UID)))
+	return strings.TrimRight(np.Name[:42], "-.") + fmt.Sprintf("-%x-prepull", digest[:6])
 }
