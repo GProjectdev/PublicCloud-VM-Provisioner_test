@@ -333,6 +333,20 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 
 	case mlv1alpha1.NodeProvisionPhaseFailed:
+		// Status watch events can arrive before RequeueAfter. Preserve the
+		// failure and enforce its persisted cooldown before resetting phase;
+		// otherwise every failure update immediately starts another EC2 launch.
+		if np.Status.LastUpdated == nil {
+			now := metav1.Now()
+			np.Status.LastUpdated = &now
+			if err := r.updateNodeProvisionStatus(ctx, np); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: requeueFailed}, nil
+		}
+		if remaining := failedRetryDelay(np, time.Now()); remaining > 0 {
+			return ctrl.Result{RequeueAfter: remaining}, nil
+		}
 		if err := r.cleanupVPNPeer(ctx, np); err != nil {
 			log.Error(err, "releasing stale VPN peer before retry (continuing)")
 		}
@@ -344,6 +358,9 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		if fresh.Status.Phase != mlv1alpha1.NodeProvisionPhaseFailed {
 			return ctrl.Result{}, nil
+		}
+		if remaining := failedRetryDelay(fresh, time.Now()); remaining > 0 {
+			return ctrl.Result{RequeueAfter: remaining}, nil
 		}
 		now := metav1.Now()
 		fresh.Status.Phase = ""
@@ -362,6 +379,20 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	default:
 		return ctrl.Result{}, nil
 	}
+}
+
+func failedRetryDelay(np *mlv1alpha1.NodeProvision, now time.Time) time.Duration {
+	if np.Status.LastUpdated == nil {
+		return requeueFailed
+	}
+	age := now.Sub(np.Status.LastUpdated.Time)
+	if age < 0 {
+		return requeueFailed
+	}
+	if age < requeueFailed {
+		return requeueFailed - age
+	}
+	return 0
 }
 
 // ────────────────────────────────────────────────────────────────────────────

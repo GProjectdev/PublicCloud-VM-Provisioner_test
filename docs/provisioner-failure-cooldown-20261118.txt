@@ -1,0 +1,48 @@
+NodeProvision failed-launch cooldown — 2026-11-18
+
+Observed in aws1/ap-northeast-2c
+A fresh g5.xlarge Spot request repeatedly received AWS RunInstances
+InsufficientInstanceCapacity. The dedicated namespace had no EC2 instance.
+Provider logs contained59 scoped error lines during the recheck. The CR's
+Failed state/error was rapidly overwritten by the next CreatingInstance
+state, so a five-second observer could miss the actual capacity error.
+This was genuine AWS supply failure, not evidence of a quota or IAM failure.
+
+Cause
+internal/controller/ml/nodeprovision_controller.go returned RequeueAfter=1min
+from failNodeProvision, but the status write itself enqueued another reconcile.
+The Failed branch immediately reset Phase="", generating another status event
+and launching again before the intended minute had elapsed.
+
+Minimal change
+The existing Failed branch now uses persisted status.lastUpdated to wait for
+the existing requeueFailed interval before clearing the failure. Repeated
+status-watch events preserve the original message/timestamp. Missing historical
+timestamps are initialized once without erasing the error. A fresh status is
+rechecked before retry. Deletion still precedes this phase switch, so normal
+teardown is not held by the cooldown. No CRD, market policy, VM type selection,
+AWS retry algorithm or finalizer bypass was introduced.
+
+Evidence
+internal/controller/ml/nodeprovision_retry_test.go exercises recent failure,
+missing timestamp and expired cooldown. An immediate second reconcile cannot
+change ResourceVersion/timestamp, erase the error or enter AWS provisioning.
+Targeted VPC/fence/prepull tests passed. go test ./... -skip '^TestControllers$'
+also passed. The two envtest-backed TestControllers suites were excluded because
+local control-plane test binaries were unavailable; do not call them passed.
+
+Buildah-published image (registry digest verified)
+ docker.io/jeongseungjun/my-publiccloudvm-provisioner@sha256:5586765f0757aad88666bea082b23631a18d62b24d106de9579362522807fe83
+Source hash: fe6f536dc3d8 (full hash in image receipt)
+AWS and ONPRE1 remote-cluster-provisioner rollouts completed normally.
+Build/test/deployment receipts:
+ /home/ubuntu/v3-validation-20261118/provisioner-retry-fix
+Original failed recheck and normal cleanup:
+ /home/ubuntu/v3-validation-20261118/gpt2-four-rank-g5-retry-04
+
+Limits
+The live capacity failure was observed before this image; persistence/cooldown
+behavior is regression-tested with a fake Kubernetes client. A later successful
+Spot creation does not itself prove the failure cooldown under AWS failure.
+The g5.2xlarge alternative was explicitly allowed by the user and is a separate
+one-A10G-per-VM acceptance condition, not a silent change to formal A/B/C.
