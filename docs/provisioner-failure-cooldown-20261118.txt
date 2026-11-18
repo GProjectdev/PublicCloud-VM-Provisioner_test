@@ -32,13 +32,25 @@ also passed. The two envtest-backed TestControllers suites were excluded because
 local control-plane test binaries were unavailable; do not call them passed.
 
 Buildah-published image (registry digest verified)
- docker.io/jeongseungjun/my-publiccloudvm-provisioner@sha256:5586765f0757aad88666bea082b23631a18d62b24d106de9579362522807fe83
-Source hash: fe6f536dc3d8 (full hash in image receipt)
+ docker.io/jeongseungjun/my-publiccloudvm-provisioner@sha256:0bdf542e55859283528feec86eff3ec634f776c72dfc4177616b73b028785b62
+Source hash: b7dd43f59d87b742e8cdaf7578112bfa649afc85d0b587d087e8fb8c6e8c6f36
 AWS and ONPRE1 remote-cluster-provisioner rollouts completed normally.
 Build/test/deployment receipts:
- /home/ubuntu/v3-validation-20261118/provisioner-retry-fix
+ /home/ubuntu/v3-validation-20261118/provisioner-retry-main-fix
 Original failed recheck and normal cleanup:
  /home/ubuntu/v3-validation-20261118/gpt2-four-rank-g5-retry-04
+
+Source-baseline correction
+The first build (digest5586765f...) incorrectly used the older working checkout
+branch In-aws-create-WorkerNode instead of the actual deployed main code. That
+diagnostic was stopped before training/FIS and the previous image restored.
+The correct baseline is main abea04d42d2b7707bcb0c51f02ec28ce950b9ea7, matching
+the existing launch-default snapshot, fencing, runtime certification and image
+preparation fixes. Only the persisted-cooldown patch/test was carried onto it
+(commit62d8674). The original branch and commits remain preserved. The failed
+attempt and exact normal EC2/key cleanup remain recorded in
+ /home/ubuntu/v3-validation-20261118/gpt2-four-rank-g52-fis-05
+Do not use the withdrawn image or treat that attempt as a scientific result.
 
 Limits
 The live capacity failure was observed before this image; persistence/cooldown
