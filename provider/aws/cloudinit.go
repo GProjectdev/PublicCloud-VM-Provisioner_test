@@ -276,11 +276,22 @@ command -v bash >/dev/null 2>&1 || { echo 'bash is required'; exit 1; }
 command -v systemctl >/dev/null 2>&1 || { echo 'systemd is required'; exit 1; }
 
 apt_update() {
-  DEBIAN_FRONTEND=noninteractive apt-get \
-    -o DPkg::Lock::Timeout=300 \
-    -o Acquire::http::Timeout=30 \
-    -o Acquire::https::Timeout=30 \
-    -o Acquire::Retries=3 update
+  # Signed repository metadata may temporarily disagree during mirror sync.
+  # Retry the whole transaction; never disable signature/hash checks.
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if DEBIAN_FRONTEND=noninteractive apt-get \
+      -o DPkg::Lock::Timeout=300 \
+      -o Acquire::http::Timeout=30 \
+      -o Acquire::https::Timeout=30 \
+      -o Acquire::Retries=3 update; then
+      return 0
+    fi
+    report "Package index refresh failed (attempt ${attempt}/5)"
+    if [[ "$attempt" != 5 ]]; then sleep 30; fi
+  done
+  report "Package index refresh exhausted retries; bootstrap stopped"
+  return 1
 }
 
 apt_install() {
