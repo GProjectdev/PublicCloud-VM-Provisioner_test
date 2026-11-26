@@ -140,6 +140,13 @@ type GCPConfig struct {
 // +kubebuilder:validation:XValidation:rule="self.networkMode != 'VPC' || self.provider == 'AWS'",message="VPC networking requires the AWS provider"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.fence) || self == oldSelf",message="provisioning spec is immutable after a fence request"
 type NodeProvisionSpec struct {
+	// NetConfigName selects a reviewed NetConfig in this NodeProvision's namespace.
+	// Empty preserves the legacy single-config lookup; ambiguous lookups fail closed.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="netConfigName is immutable"
+	// +optional
+	NetConfigName string `json:"netConfigName,omitempty"`
 	// Fence irreversibly terminates this AWS VPC instance without deleting its receipt.
 	// +optional
 	Fence *NodeProvisionFenceRequest `json:"fence,omitempty"`

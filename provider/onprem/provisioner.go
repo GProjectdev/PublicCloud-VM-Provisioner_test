@@ -742,29 +742,20 @@ func GetNextAvailableIP(vpnRange string, usedIPs []string) (string, error) {
 
 // getNextAvailableIP returns the next IP in vpnRange that is not in usedIPs.
 func getNextAvailableIP(vpnRange string, usedIPs []string) (string, error) {
-	lastUsedIP := ""
-	if len(usedIPs) > 0 {
-		lastUsedIP = usedIPs[len(usedIPs)-1]
-	}
-
 	ip, ipNet, err := net.ParseCIDR(vpnRange)
 	if err != nil {
 		return "", fmt.Errorf("invalid VPN range: %w", err)
 	}
-
-	var nextIP net.IP
-	if lastUsedIP != "" {
-		nextIP = net.ParseIP(lastUsedIP)
-		if nextIP == nil {
-			return "", fmt.Errorf("invalid last used IP: %s", lastUsedIP)
-		}
-	} else {
-		nextIP = ip
+	// Live peers can belong to other ranges and map iteration has no order.
+	// Always search within the requested network, independent of input order.
+	if ip.To4() == nil {
+		return "", fmt.Errorf("VPN allocation currently requires IPv4")
 	}
+	nextIP := ip.Mask(ipNet.Mask)
 
 	for {
 		nextIP = incrementIP(nextIP)
-		if !ipNet.Contains(nextIP) {
+		if !ipNet.Contains(nextIP) || !ipNet.Contains(incrementIP(append(net.IP(nil), nextIP...))) {
 			return "", fmt.Errorf("no available IPs in VPN range")
 		}
 		nextIPStr := nextIP.String()

@@ -224,6 +224,9 @@ func (r *NodeProvisionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if np.Spec.Fence != nil || np.Status.Fence != nil {
 		return r.reconcileFence(ctx, np)
 	}
+	if changed, err := r.pinNetConfig(ctx, np); changed || err != nil {
+		return ctrl.Result{RequeueAfter: time.Second}, err
+	}
 
 	// For AWS nodes, keep a controller-owned copy of the credentials secret up-to-date.
 	// The user-supplied secret can be deleted at any time; during teardown the
@@ -1828,7 +1831,7 @@ func (r *NodeProvisionReconciler) handleDelete(ctx context.Context, np *mlv1alph
 
 	// ── Remove VPN peer ─────────────────────────────────────────────────────
 	if err := r.cleanupVPNPeer(ctx, np); err != nil {
-		log.Error(err, "cleaning up VPN peer (continuing)")
+		return ctrl.Result{}, fmt.Errorf("VPN cleanup incomplete; retaining finalizer: %w", err)
 	}
 
 	// ── Clean up node-related secrets (after cloud resources are gone) ────────
@@ -1867,15 +1870,10 @@ func (r *NodeProvisionReconciler) cleanupVPNPeer(ctx context.Context, np *mlv1al
 	}
 	log := logf.FromContext(ctx)
 
-	netConfigList := &mlv1alpha1.NodeProvisionNetConfigList{}
-	if err := r.List(ctx, netConfigList); err != nil {
-		return fmt.Errorf("listing NodeProvisionNetConfigs for VPN cleanup: %w", err)
+	netConfig, selectErr := r.selectNetConfig(ctx, np)
+	if selectErr != nil {
+		return fmt.Errorf("selecting NetConfig for VPN cleanup: %w", selectErr)
 	}
-	if len(netConfigList.Items) == 0 {
-		log.Info("No NodeProvisionNetConfig found — skipping VPN peer cleanup")
-		return nil
-	}
-	netConfig := &netConfigList.Items[0]
 
 	// ── 1. Resolve public key and VPN IP from CR status ─────────────────────
 	// Do this BEFORE connecting to the VPN server so we still have the peer key
@@ -2037,22 +2035,10 @@ const joinTokenMaxAge = 20 * time.Hour
 // dependency required.
 func (r *NodeProvisionReconciler) requireNetConfig(ctx context.Context, np *mlv1alpha1.NodeProvision) (*mlv1alpha1.NodeProvisionNetConfig, error) {
 	log := logf.FromContext(ctx)
-	netConfigList := &mlv1alpha1.NodeProvisionNetConfigList{}
-	var options []client.ListOption
-	if np.Spec.NetworkMode == "VPC" {
-		options = append(options, client.InNamespace(np.Namespace))
+	nc, err := r.selectNetConfig(ctx, np)
+	if err != nil {
+		return nil, err
 	}
-	if err := r.List(ctx, netConfigList, options...); err != nil {
-		return nil, fmt.Errorf("listing NodeProvisionNetConfigs: %w", err)
-	}
-	if np.Spec.NetworkMode == "VPC" && len(netConfigList.Items) > 1 {
-		return nil, fmt.Errorf("VPC mode requires exactly one NodeProvisionNetConfig in namespace %s", np.Namespace)
-	}
-	if len(netConfigList.Items) == 0 {
-		log.Info("No NodeProvisionNetConfig found yet; requeueing")
-		return nil, fmt.Errorf("no NodeProvisionNetConfig")
-	}
-	nc := &netConfigList.Items[0]
 
 	needsRefresh := nc.Status.ClusterJoinCommand == "" ||
 		nc.Status.JoinTokenRefreshedAt == nil ||

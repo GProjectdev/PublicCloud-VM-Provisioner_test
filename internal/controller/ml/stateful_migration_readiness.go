@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -238,17 +239,16 @@ func (r *NodeProvisionReconciler) statefulMigrationRequested(ctx context.Context
 	if np.Spec.Provider != mlv1alpha1.CloudProviderAWS {
 		return false, nil
 	}
-	configs := &mlv1alpha1.NodeProvisionNetConfigList{}
-	if err := r.List(ctx, configs, client.InNamespace(np.Namespace)); err != nil {
-		return false, err
-	}
-	if len(configs.Items) == 0 {
+	config, err := r.selectNetConfig(ctx, np)
+	// Legacy VPC CPU workers can intentionally omit the optional software
+	// profile. An explicitly selected missing/recreated config still fails.
+	if np.Spec.NetworkMode == "VPC" && np.Spec.NetConfigName == "" && errors.Is(err, errNoLegacyNetConfig) {
 		return false, nil
 	}
-	if len(configs.Items) > 1 {
-		return false, fmt.Errorf("multiple NodeProvisionNetConfig resources found in namespace %s", np.Namespace)
+	if err != nil {
+		return false, err
 	}
-	software := configs.Items[0].Spec.SoftwareConfig.NodeSoftware
+	software := config.Spec.SoftwareConfig.NodeSoftware
 	return software != nil && software.RuntimeProfile == "StatefulMigration", nil
 }
 

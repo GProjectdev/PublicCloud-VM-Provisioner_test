@@ -64,14 +64,11 @@ func (r *NodeProvisionReconciler) restoreCertificationPending(ctx context.Contex
 	if err != nil || !stateful {
 		return false, err
 	}
-	configs := &api.NodeProvisionNetConfigList{}
-	if err := r.List(ctx, configs, client.InNamespace(np.Namespace)); err != nil {
+	config, err := r.selectNetConfig(ctx, np)
+	if err != nil {
 		return false, err
 	}
-	if len(configs.Items) != 1 {
-		return false, fmt.Errorf("restore certification requires exactly one namespace NetConfig")
-	}
-	cfg := configs.Items[0].Spec.SoftwareConfig.NodeSoftware
+	cfg := config.Spec.SoftwareConfig.NodeSoftware
 	if cfg.MigrationRuntime == nil || !cfg.MigrationRuntime.CertifyRestore {
 		return false, nil
 	}
