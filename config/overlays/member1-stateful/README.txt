@@ -20,3 +20,10 @@ Before releasing a workload on a newly joined worker require:
 approval RBAC. Existing workers masked this configuration gap. A new worker
 exposed it before two-rank cross-member validation. Live correction used the
 same restricted approval rules and flag; controller image was unchanged.
+
+For the administrator-qualified StatefulMigration package, enable
+NodeProvisionNetConfig.spec.softwareConfig.nodeSoftware.migrationRuntime.certifyRestore.
+The existing Provisioner then performs its real TLS/GPU/runtime checks and
+publishes restore-from-file and the package SHA256. Do not set those Node
+labels manually. TrainingRun's initial execution gate waits for this evidence
+on NodeProvision-managed OnPrem nodes; Kubernetes Node Ready alone is insufficient.
